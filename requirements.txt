@@ -1,0 +1,10 @@
+tqdm
+python-dotenv
+google-generativeai
+importlib-metadata
+beautifulsoup4
+readabilipy
+trafilatura
+datasets
+nltk
+numpy
