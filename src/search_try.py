@@ -25,7 +25,7 @@ def clean_source_gpt35(source : str) -> str:
                 "Clean and refine the extracted text from a website. Remove any unwanted content such as headers, sidebars, and navigation menus. Retain only the main content of the page and ensure that the text is well-formatted and free of HTML tags, special characters, and any other irrelevant information. Refined text should contain the main intended readable text. Apply markdown formatting when outputting the answer.\n\nHere is the website:\n```html_text\n"
                 + source.strip() + "```"
             )
-            model_client = genai.GenerativeModel("gemini-2.5-flash")
+            model_client = genai.GenerativeModel("gemini-2.5-pro")
             response = model_client.generate_content(
                 prompt,
                 generation_config={

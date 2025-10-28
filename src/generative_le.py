@@ -20,7 +20,7 @@ Search Results:
 
 # Remove Bedrock client; using Gemini instead
 
-def generate_answer(query, sources, num_completions, temperature = 0.5, verbose = False, model = 'gemini-2.5-flash'):
+def generate_answer(query, sources, num_completions, temperature = 0.5, verbose = False, model = 'gemini-2.5-pro'):
 
     source_text = '\n\n'.join(['### Source '+str(idx+1)+':\n'+source + '\n\n\n' for idx, source in enumerate(sources)])
     prompt = query_prompt.format(query = query, source_text = source_text)
@@ -45,9 +45,9 @@ def generate_answer(query, sources, num_completions, temperature = 0.5, verbose 
                 break
             except Exception as e:
                 print('Error in calling Gemini API', e)
-                # Fallback to 1.5 flash model if the specified one is unavailable
+                # Fallback to 2.5 flash model if the specified one is unavailable
                 if '404' in str(e) or 'not found' in str(e).lower():
-                    model = 'gemini-1.5-flash-001'
+                    model = 'gemini-2.5-flash'
                     model_client = genai.GenerativeModel(model)
                     continue
                 time.sleep(15)
