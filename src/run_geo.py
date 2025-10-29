@@ -106,4 +106,5 @@ if __name__ == '__main__':
 	for i, k in enumerate(dataset['test']):
 		# Insert Metric here 
 		print(improve(k['query'], idx = int(k['sugg_idx']), impression_fn=impression_wordpos_count_simple))
+		#TODO remove later, one iteration right now for debugging
 		break

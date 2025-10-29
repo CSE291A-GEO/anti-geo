@@ -8,3 +8,4 @@ trafilatura
 datasets
 nltk
 numpy
+requests
