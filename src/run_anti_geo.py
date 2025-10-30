@@ -4,6 +4,7 @@ from geo_functions import *
 from datasets import load_dataset
 from generative_le import generate_answer
 import string
+import re
 
 IMPRESSION_FNS = {
 	'simple_wordpos' : impression_wordpos_count_simple, 
@@ -70,24 +71,44 @@ def calculate_visibility_score(query: str, answers: List[str] = None, sources: L
 
 if __name__ == '__main__':
     dataset = load_dataset("GEO-Optim/geo-bench", 'test')
+    target_scores = []
+    baseline_scores = []
+    suffixing_scores = []
+    sandwiching_scores = []
     
     for i, k in enumerate(dataset['test']):
         geo_sources = k['geo-sources']
         anti_geo_sources = k['anti-geo-sources']
 
-        target_score = calculate_visibility_score(k['query'], geo_sources)
-        baseline_score = calculate_visibility_score(k['query'], anti_geo_sources)
-        suffixing_score = calculate_visibility_score(k['query'], run_suffix_experiment(k['query'], anti_geo_sources))
-        sandwiching_score = calculate_visibility_score(k['query'], run_sandwich_experiment(k['query'], anti_geo_sources))
+        target_scores.append(calculate_visibility_score(k['query'], geo_sources))
+        baseline_scores.append(calculate_visibility_score(k['query'], anti_geo_sources))
+        suffixing_scores.append([])
+        sandwiching_scores.append([])
 
-        print("Target score: " + string(target_score))
-        print("Baseline score: " + string(baseline_score))
-        print("Experiment 1 score: " + string(suffixing_score))
-        print("Experiment 2 score: " + string(sandwiching_score))
+        with open('suffix_warnings.txt', 'r') as f:
+            # Prompts are assumed to be separated by two new lines
+            suffix_prompts = re.split(r'\n\n', f.read())
 
-        print("Baseline-Target distance = " + string(baseline_score - target_score))
-        print("Suffixing-Target distance = " + string(suffixing_score - target_score))
-        print("Sandwiching-Target distance = " + string(sandwiching_score - target_score))
+        with open('sandwich_warnings.txt', 'r') as f:
+            # Prompts are assumed to be separated by two new lines
+            sandwich_prompts = re.split(r'\n\n', f.read())
+
+        for s in suffix_prompts:
+            answers = run_suffix_experiment(s.format(k['query']), anti_geo_sources)
+            suffixing_scores[i].append(calculate_visibility_score(k['query'], answers))
+        
+        for s in sandwich_prompts:
+            answers = run_sandwich_experiment(s.format(k['query']), anti_geo_sources)
+            sandwiching_scores[i].append(calculate_visibility_score(k['query'], answers))
+
+        print("Target score: " + string(target_scores[i]))
+        print("Baseline score: " + string(baseline_scores[i]))
+        print("Experiment 1 score: " + string(suffixing_scores[i]))
+        print("Experiment 2 score: " + string(sandwiching_scores[i]))
+
+        print("Baseline-Target distance = " + string(baseline_scores[i] - target_scores[i]))
+        print("Suffixing-Target distance = " + string(suffixing_scores[i] - target_scores[i]))
+        print("Sandwiching-Target distance = " + string(sandwiching_scores[i] - target_scores[i]))
 
         # TODO Plot score distances in scatterplot: baseline score as a line and suffixing v/s sandwiching as above or below it
 

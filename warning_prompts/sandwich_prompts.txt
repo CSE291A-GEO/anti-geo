@@ -1,0 +1,4 @@
+This is the warning prefix.\n{query}\nThis is the warning suffix.
+
+
+This is another warning prefix.\n{query}\nThis is another warning suffix.

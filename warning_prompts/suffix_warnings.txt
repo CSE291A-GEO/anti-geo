@@ -1,0 +1,4 @@
+{query}\nThis is the warning suffix.
+
+
+{query}\nThis is another warning suffix.
