@@ -4,12 +4,16 @@ import itertools
 from glob import glob
 from dotenv import load_dotenv
 import time
-import google.generativeai as genai
+# import google.generativeai as genai  # Commented out - switched to Ollama
+import ollama
 import json
 import os
 
 load_dotenv()
-genai.configure(api_key=os.environ.get('GEMINI_API_KEY', ''))
+# genai.configure(api_key=os.environ.get('GEMINI_API_KEY', ''))  # Commented out - switched to Ollama
+
+# Ollama configuration
+OLLAMA_MODEL = os.environ.get('OLLAMA_MODEL', 'qwen2.5:3b')
 
 PROMPT_TEMPLATE = "<s>[INST] <<SYS>>\n{system_prompt}\n<</SYS>>\n\n{user_msg}[/INST]"
 
@@ -190,17 +194,17 @@ def impression_subjective_impression(sentences, query, n = 5, normalize = True, 
         cur_prompt = prompt.format(query = query, answer = sentences)
         while True:
             try:
-                # Ask Gemini to return a single number 1-5
-                model_client = genai.GenerativeModel('gemini-1.5-pro')
-                resp = model_client.generate_content(
-                    cur_prompt + "\n\nRespond with only a single number from 1 to 5.",
-                    generation_config={
+                # Ask Ollama to return a single number 1-5
+                resp = ollama.generate(
+                    model=OLLAMA_MODEL,
+                    prompt=cur_prompt + "\n\nRespond with only a single number from 1 to 5.",
+                    options={
                         'temperature': 0.0,
                         'top_p': 1.0,
-                        'max_output_tokens': 4,
+                        'num_predict': 4,
                     }
                 )
-                response_text = (resp.text or '').strip()
+                response_text = (resp['response'] or '').strip()
                 try:
                     avg_score = convert_to_number(response_text)
                 except:
@@ -210,8 +214,8 @@ def impression_subjective_impression(sentences, query, n = 5, normalize = True, 
                 scores[os.path.split(prompt_file)[-1].split('.')[0]] = avg_score
                 break
             except Exception as e:
-                print('Error in Gemini-Eval', e)
-                time.sleep(10)
+                print('Error in Ollama-Eval', e)
+                time.sleep(5)  # Shorter wait for local model
     avg_score = sum(scores.values())/len(scores.values())
     cache = json.load(open(cache_file))
     if str((sentences, query)) not in cache:

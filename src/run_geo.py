@@ -8,7 +8,7 @@ import time
 import os
 from datasets import load_dataset
 
-def identity(summary, source):
+def identity(summary, source=None):
 	return summary
 
 IMPRESSION_FNS = {
@@ -104,7 +104,22 @@ def improve(query : str, idx : int, sources : List[str] = None, summaries : List
 if __name__ == '__main__':
 	dataset = load_dataset("GEO-Optim/geo-bench", 'test')
 	for i, k in enumerate(dataset['test']):
+		# Extract sources from dataset (use cleaned_text if available, otherwise raw_text)
+		dataset_sources = [
+			s.get('cleaned_text', s.get('raw_text', '')) 
+			for s in k['sources']
+		]
+		
 		# Insert Metric here 
-		print(improve(k['query'], idx = int(k['sugg_idx']), impression_fn=impression_wordpos_count_simple))
+		# OLD: Uses web search (not reproducible, not using benchmark sources)
+		# print(improve(k['query'], idx = int(k['sugg_idx']), impression_fn=impression_wordpos_count_simple))
+		
+		# NEW: Uses dataset sources directly (reproducible, uses exact benchmark sources)
+		print(improve(
+			k['query'], 
+			idx=int(k['sugg_idx']), 
+			summaries=dataset_sources,  # Pass dataset sources directly!
+			impression_fn=impression_wordpos_count_simple
+		))
 		#TODO remove later, one iteration right now for debugging
 		break

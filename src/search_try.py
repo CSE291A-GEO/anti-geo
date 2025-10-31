@@ -5,7 +5,8 @@ from readabilipy import simple_json_from_html_string
 import trafilatura
 import nltk
 from dotenv import load_dotenv
-import google.generativeai as genai
+# import google.generativeai as genai  # Commented out - switched to Ollama
+import ollama
 import json
 import os
 import pickle
@@ -16,8 +17,12 @@ print("DEBUG: All imports completed")
 load_dotenv()
 print("DEBUG: .env loaded")
 
-genai.configure(api_key=os.environ.get('GEMINI_API_KEY', ''))
-print("DEBUG: Gemini configured")
+# genai.configure(api_key=os.environ.get('GEMINI_API_KEY', ''))  # Commented out - switched to Ollama
+# print("DEBUG: Gemini configured")
+
+# Ollama configuration
+OLLAMA_MODEL = os.environ.get('OLLAMA_MODEL', 'qwen2.5:3b')
+print(f"DEBUG: Using Ollama model: {OLLAMA_MODEL}")
 
 # download NLTK punkt tokenizer
 print("DEBUG: About to download NLTK punkt")
@@ -29,61 +34,35 @@ except Exception as e:
     print("DEBUG: Continuing without NLTK...")
 
 
-def clean_source_gpt35(source : str) -> str:
-    print(f"DEBUG: clean_source_gpt35 called with source length: {len(source)}")
+def clean_source_ollama(source : str) -> str:
+    print(f"DEBUG: clean_source_ollama called with source length: {len(source)}")
     
-    # Use smaller chunks to avoid rate limits (500 characters each)
-    chunk_size = 500
-    chunks = [source[i:i+chunk_size] for i in range(0, len(source), chunk_size)]
-    print(f"DEBUG: Split into {len(chunks)} chunks")
-    
-    cleaned_chunks = []
-    
-    for chunk_idx, chunk in enumerate(chunks):
-        print(f"DEBUG: Processing chunk {chunk_idx + 1}/{len(chunks)}")
+    # Use a simpler, faster approach - process entire text at once (already limited to 4000 chars)
+    # This is much faster than chunking for local models
+    try:
+        print(f"DEBUG: Processing entire text with Ollama")
+        prompt = (
+            "Clean this web content by removing navigation, ads, and irrelevant text. "
+            "Keep only the main informative content. Be concise.\n\n"
+            + source[:3000]  # Further limit for speed
+        )
         
-        response = None
-        for attempt in range(2):  # Only 2 attempts per chunk
-            try:
-                print(f"DEBUG: Gemini API attempt {attempt + 1} for chunk {chunk_idx + 1}")
-                prompt = (
-                    f"Clean and refine this text excerpt from a website (chunk {chunk_idx + 1} of {len(chunks)}). Remove any unwanted content such as headers, sidebars, and navigation menus. Retain only the main content and ensure that the text is well-formatted and free of HTML tags, special characters, and any other irrelevant information. Apply markdown formatting when outputting the answer.\n\nHere is the text excerpt:\n```html_text\n"
-                    + chunk.strip() + "```"
-                )
-                model_client = genai.GenerativeModel("gemini-2.5-flash")
-                response = model_client.generate_content(
-                    prompt,
-                    generation_config={
-                        'temperature': 0.0,
-                        'top_p': 1.0,
-                        'max_output_tokens': 500,  # Smaller output for chunks
-                    }
-                )
-                print(f"DEBUG: Gemini API attempt {attempt + 1} successful for chunk {chunk_idx + 1}")
-                break
-            except Exception as e:
-                print(f'Error while cleaning chunk {chunk_idx + 1} with Gemini API {e}')
-                if attempt < 1:  # Only sleep once
-                    import time
-                    time.sleep(1)  # Shorter sleep
+        resp = ollama.generate(
+            model=OLLAMA_MODEL,
+            prompt=prompt,
+            options={
+                'temperature': 0.0,
+                'top_p': 1.0,
+                'num_predict': 800,  # Limit output tokens for speed
+            }
+        )
+        response = (resp['response'] or '').strip()
+        print(f"DEBUG: Ollama cleaning successful, output length: {len(response)}")
+        return response if len(response) > 100 else source  # Fallback if output too short
         
-        if response is None:
-            print(f"DEBUG: All Gemini API attempts failed for chunk {chunk_idx + 1}, using original chunk")
-            cleaned_chunks.append(chunk)
-        else:
-            cleaned_text = (response.text or '').strip()
-            print(f"DEBUG: Chunk {chunk_idx + 1} cleaned, length: {len(cleaned_text)}")
-            cleaned_chunks.append(cleaned_text)
-        
-        # Add small delay between chunks to avoid rate limits
-        if chunk_idx < len(chunks) - 1:
-            import time
-            time.sleep(0.5)
-    
-    # Combine all cleaned chunks
-    result = "\n\n".join(cleaned_chunks)
-    print(f"DEBUG: Final cleaned text length: {len(result)}")
-    return result
+    except Exception as e:
+        print(f'ERROR: Ollama cleaning failed: {e}')
+        return source  # Return original on failure
 
 def clean_source_text(text: str) -> str:
     return (
@@ -270,23 +249,24 @@ def search_handler(req, source_count = 8):
         if source_text:
             print(f"DEBUG: Processing source_text, length: {len(source_text)}")
             source_text = clean_source_text(source_text)
-            print('DEBUG: Going to call Gemini API')
+            print('DEBUG: Going to call Ollama API')
             raw_source = source_text
             
-            # Try Gemini API with improved error handling
-            # try:
-            #     print('DEBUG: Attempting Gemini API call')
-            #     cleaned_source = clean_source_gpt35(source_text[:8000])
-            #     source_text = cleaned_source
-            #     print('DEBUG: Gemini API Called successfully')
-            # except Exception as e:
-            #     print(f'DEBUG: Gemini API failed: {e}, using original text')
-            #     # Use original text if Gemini fails
-            #     source_text = source_text
+            # Try Ollama API with improved error handling and timeout
+            try:
+                print('DEBUG: Attempting Ollama API call for text cleaning')
+                # Limit input size to avoid long processing times
+                text_to_clean = source_text[:4000]  # Reduced from 8000 for faster processing
+                print(f'DEBUG: Cleaning {len(text_to_clean)} characters')
+                cleaned_source = clean_source_ollama(text_to_clean)
+                source_text = cleaned_source
+                print('DEBUG: Ollama API Called successfully')
+            except Exception as e:
+                print(f'DEBUG: Ollama API failed: {e}, using original text')
+                # Use original text if Ollama fails
+                source_text = source_text[:8000]  # Still limit size
             
-            # Skip Gemini API for now - use raw scraped content
-            print('DEBUG: Skipping Gemini API, using raw scraped content')
-            # source_text is already cleaned by clean_source_text()
+            print('DEBUG: Text cleaning completed')
             
             summary_text = summarize_text_identity(source_text, query)
             sources.append({'url': link, 'text': f'Title: {page_title}\nSummary:' + summary_text, 'raw_source' : raw_source, 'source' : source_text, 'summary' : summary_text})

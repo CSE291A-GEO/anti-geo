@@ -1,6 +1,6 @@
 tqdm
 python-dotenv
-google-generativeai
+# google-generativeai  # Commented out - switched to Ollama
 importlib-metadata
 beautifulsoup4
 readabilipy
@@ -9,3 +9,4 @@ datasets
 nltk
 numpy
 requests
+ollama
