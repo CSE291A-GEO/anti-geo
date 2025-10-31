@@ -1,16 +1,16 @@
 from dotenv import load_dotenv
-# import google.generativeai as genai  # Commented out - switched to Ollama
-import ollama
+import google.generativeai as genai
+# import ollama  # Commented out - using Gemini
 import json
 import os
 import pickle
 import uuid
 
 load_dotenv()
-# genai.configure(api_key=os.environ.get('GEMINI_API_KEY', ''))  # Commented out - switched to Ollama
+genai.configure(api_key=os.environ.get('GEMINI_API_KEY', ''))
 
-# Ollama configuration
-OLLAMA_MODEL = os.environ.get('OLLAMA_MODEL', 'qwen2.5:3b')
+# Gemini configuration (reverted from Ollama)
+# OLLAMA_MODEL = os.environ.get('OLLAMA_MODEL', 'qwen2.5:3b')
 
 _BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CACHE_FILE = os.environ.get('GEO_CACHE_FILE', os.path.join(_BASE_DIR, 'geo_optimizations_cache.json'))
@@ -24,11 +24,11 @@ global_cache = None
 def call_gpt(user_prompt, system_prompt = COMMON_SYSTEM_PROMPT, model = None, temperature = 0.0, num_completions = 1, regenerte_answer = False, pre_msgs = None):
     global global_cache
     
-    # Use Ollama model instead of Gemini
+    # Use Gemini model
     if model is None:
-        model = OLLAMA_MODEL
+        model = genai.GenerativeModel('gemini-2.5-pro', system_instruction=system_prompt)
     
-    cache_file = CACHE_FILE.replace('.json',f'_{model.replace(":", "_")}.json')
+    cache_file = CACHE_FILE
     if os.environ.get('STATIC_CACHE',None) == 'True':
         if global_cache is None:
             if os.path.exists(cache_file):
@@ -46,56 +46,29 @@ def call_gpt(user_prompt, system_prompt = COMMON_SYSTEM_PROMPT, model = None, te
 
     print('Cache Miss')
 
-    # Construct full prompt with system instruction for Ollama
-    full_prompt = f"{system_prompt}\n\n{user_prompt}"
-    
-    if pre_msgs is not None:
-        # Add previous messages context
-        for msg in pre_msgs:
-            full_prompt = f"{full_prompt}\n\n{msg.get('content', '')}"
-
     for attempt in range(10):
         try:
-            choices = []
-            for _ in range(num_completions):
-                # Ollama API call
-                resp = ollama.generate(
-                    model=model,
-                    prompt=full_prompt,
-                    options={
-                        'temperature': float(temperature),
-                        'top_p': 1.0,
-                        'num_predict': 3192,
-                    }
+            responses = model.generate_content(
+                user_prompt,
+                generation_config=genai.types.GenerationConfig(
+                    temperature=float(temperature),
+                    top_p=1.0,
+                    max_output_tokens=3192,
+                    candidate_count=num_completions if num_completions == 1 else 1,
                 )
-                content = (resp['response'] or '').strip()
-                class _Choice:
-                    def __init__(self, content):
-                        self.message = type('obj', (object,), {'content': content})
-                choices.append(_Choice(content))
-            responses = type('obj', (object,), {'choices': choices})
+            )
             break
         except Exception as e:
             print('Error',e)
-            if 'not found' in str(e).lower() or 'does not exist' in str(e).lower():
-                print(f'Model {model} not found, attempting to pull...')
-                try:
-                    ollama.pull(model)
-                    print(f'Successfully pulled {model}')
-                    continue
-                except:
-                    print(f'Failed to pull {model}, using default')
-                    model = 'qwen2.5:3b'
-                    continue
             if 'length' in str(e).lower() or 'context' in str(e).lower() or 'token' in str(e).lower():
                 # Reduce prompt size
-                full_prompt = full_prompt[:int(len(full_prompt) * 0.8)]  
+                user_prompt = user_prompt[:int(len(user_prompt) * 0.8)]  
             if attempt > 5:
                 # Further reduce on persistent failures
-                full_prompt = full_prompt[:int(len(full_prompt) * 0.8)]
+                user_prompt = user_prompt[:int(len(user_prompt) * 0.8)]
             print(f"Attempt {attempt + 1} failed, retrying...")
             import time
-            time.sleep(5)  # Shorter wait for local model
+            time.sleep(10)
             continue
 
     if global_cache is None:
@@ -129,12 +102,66 @@ def call_gpt(user_prompt, system_prompt = COMMON_SYSTEM_PROMPT, model = None, te
             new_tex = tex[a:].strip()
         if new_tex.lower().startswith('updated'):
             new_tex = '\n'.join(new_tex.splitlines()[1:])
+        
+        # Remove common preambles from LLM responses
+        lines = new_tex.split('\n')
+        # Skip leading lines that are preambles (like "Of course...", "Here is...", etc.)
+        while lines and len(lines) > 0:
+            first_line = lines[0].strip().lower()
+            if (first_line.startswith('of course') or 
+                first_line.startswith('here is') or
+                first_line.startswith('here\'s') or
+                first_line.startswith('certainly') or
+                first_line.startswith('sure') or
+                first_line.startswith('updated output:') or
+                first_line.startswith('source:') or
+                first_line.startswith('***') or
+                first_line == '' or
+                (len(first_line) < 200 and ('as an expert' in first_line or 
+                                           'language model' in first_line or
+                                           'revised' in first_line and 'text' in first_line))):
+                lines.pop(0)
+            else:
+                break
+        new_tex = '\n'.join(lines).strip()
+        
         if len(new_tex) == 0:
             return tex
         return new_tex
         
     print(responses)
-    cache[str((user_prompt, system_prompt))].extend([get_summary(x.message.content) for x in responses.choices])
+    # Handle Gemini API response structure with better error handling
+    extracted_text = None
+    
+    # Try different ways to extract text from response
+    if hasattr(responses, 'text'):
+        try:
+            extracted_text = responses.text
+        except Exception as e:
+            print(f'Warning: response.text failed: {e}')
+    
+    if extracted_text is None and hasattr(responses, 'candidates'):
+        # Try to get from candidates
+        try:
+            if responses.candidates:
+                extracted_text = responses.candidates[0].content.parts[0].text
+        except Exception as e:
+            print(f'Warning: candidates extraction failed: {e}')
+    
+    if extracted_text is None and hasattr(responses, 'choices'):
+        # Fallback to old format if needed
+        try:
+            extracted_text = responses.choices[0].message.content
+        except Exception as e:
+            print(f'Warning: choices extraction failed: {e}')
+    
+    if extracted_text:
+        cache[str((user_prompt, system_prompt))].append(get_summary(extracted_text))
+    else:
+        print('ERROR: Could not extract text from response, using fallback')
+        # Return the user prompt as fallback to avoid breaking the pipeline
+        cache[str((user_prompt, system_prompt))].append(user_prompt)
+    
     json.dump(cache, open(cache_file, 'w'), indent=2)
     if os.environ.get('STATIC_CACHE',None) == 'True':
         global_cache = cache
@@ -144,17 +171,23 @@ def call_gpt(user_prompt, system_prompt = COMMON_SYSTEM_PROMPT, model = None, te
 
 
 def fluent_optimization_gpt(summary):
-    user_prompt = f"""User Prompt: "Rewrite the following source to make it more fluent without altering the core content. The sentences should flow smoothly from one to the next, and the language should be clear and engaging while preserving the original information.
+    user_prompt = f"""Rewrite the following source to make it more fluent without altering the core content. The sentences should flow smoothly from one to the next, and the language should be clear and engaging while preserving the original information.
 
-Source: {summary}"
-"""
+CRITICAL INSTRUCTION: Output ONLY the rewritten content. NO preambles (no "here is", "of course", "sure"), NO explanations, NO introductory text. Start directly with the optimized content.
+
+Source: {summary}
+
+OUTPUT (content only, no preamble):"""
     return call_gpt(user_prompt)
 
 def unique_words_optimization_gpt(summary):
-    user_prompt = f"""User Prompt: "Revise the following source by incorporating more unique and rare words, without altering the core information. Ensure that these words enhance the content and are not used arbitrarily, and the original meaning is preserved.
+    user_prompt = f"""Revise the following source by incorporating more unique and rare words, without altering the core information. Ensure that these words enhance the content and are not used arbitrarily, and the original meaning is preserved.
 
-Source: {summary}"
-"""
+CRITICAL INSTRUCTION: Output ONLY the revised content. NO preambles (no "here is", "of course", "sure"), NO explanations, NO introductory text. Start directly with the optimized content.
+
+Source: {summary}
+
+OUTPUT (content only, no preamble):"""
     return call_gpt(user_prompt)
 
 def authoritative_optimization_mine(summary):
@@ -172,7 +205,11 @@ Remember to be authoritative, but keep the format and content of text the same.
 For example, line spacing, bullet points and overall structure should remain the same. 
 No addition or deletion of content is allowed. 
 Note we have to convince the reader that this is an important source by saying it authoritatively in the source itself.
-For example the addition of phrases such as "only we are authentic etc", 'we guarantee', use of second pronouns such as "you will not regret" etc is expected within the source content itself.""".format(summary = summary).strip()
+For example the addition of phrases such as "only we are authentic etc", 'we guarantee', use of second pronouns such as "you will not regret" etc is expected within the source content itself.
+
+CRITICAL INSTRUCTION: Output ONLY the transformed content. NO preambles (no "here is", "of course", "sure"), NO explanations, NO introductory text. Start directly with the optimized content.
+
+OUTPUT (content only, no preamble):""".format(summary = summary).strip()
     except:
         from pdb import set_trace as bp
         bp()
@@ -189,7 +226,11 @@ Source:
 Add more quotes in the source, even though fake and artificial. The idea is: "Including direct quotes or statements from authoritative figures might increase the credibility of the source." 
 Keep the format and content of text similar. 
 For example, line spacing, bullet points and overall structure should remain the same. 
-No addition or deletion of content is allowed. """.format(summary = summary).strip()
+No addition or deletion of content is allowed.
+
+CRITICAL INSTRUCTION: Output ONLY the modified content. NO preambles (no "here is", "of course", "sure"), NO explanations, NO introductory text. Start directly with the optimized content.
+
+OUTPUT (content only, no preamble):""".format(summary = summary).strip()
     
     return call_gpt(user_prompt)
 
@@ -204,7 +245,11 @@ Source:
 {summary}
 ```
 
-Remember the end-goal is that readers give more attention to this source, when presented with a series of summaries, so cite more sources in natural language but do not alter content. Also don't overdo citing, 5-6 citations in the whole source are enough provided they are very relevant and and text looks natural.""".format(summary = summary).strip()
+Remember the end-goal is that readers give more attention to this source, when presented with a series of summaries, so cite more sources in natural language but do not alter content. Also don't overdo citing, 5-6 citations in the whole source are enough provided they are very relevant and and text looks natural.
+
+CRITICAL INSTRUCTION: Output ONLY the revised content. NO preambles (no "here is", "of course", "sure"), NO explanations, NO introductory text. Start directly with the optimized content.
+
+OUTPUT (content only, no preamble):""".format(summary = summary).strip()
     
     return call_gpt(user_prompt)
 
@@ -218,7 +263,10 @@ Source:
 ```
 {summary}
 ```
-""".format(summary = summary).strip()
+
+CRITICAL INSTRUCTION: Output ONLY the simplified content. NO preambles (no "here is", "of course", "sure"), NO explanations, NO introductory text. Start directly with the optimized content.
+
+OUTPUT (content only, no preamble):""".format(summary = summary).strip()
     
     return call_gpt(user_prompt)
 
@@ -230,7 +278,10 @@ The length of the new source should be the same as the original. Effectively you
 
 Source:
 {summary}
-""".format(summary = summary).strip()
+
+CRITICAL INSTRUCTION: Output ONLY the technical version. NO preambles (no "here is", "of course", "sure"), NO explanations, NO introductory text. Start directly with the optimized content.
+
+OUTPUT (content only, no preamble):""".format(summary = summary).strip()
     
     return call_gpt(user_prompt)
 
@@ -257,6 +308,8 @@ Add NEW keywords in the source that optimize the content in accordance with SEO 
 k. In sentence about keyword zzz, add keyword xxx
 
 Now I will output the updated text:
+CRITICAL INSTRUCTION: Output ONLY the optimized content in the format below. NO preambles (no "here is", "of course", "sure"), NO explanations before the content. Start directly with your keyword identification list, then the optimized content.
+
 Updated Output:
 ```
 <Output>
@@ -275,6 +328,8 @@ def stats_optimization_mine(summary):
 ## Task:
 Add positive, compelling statistics (even if hypothetical) at multiple relevant places in the text. Statsistics means objective facts such as x% growth in marketing, numbers in scientific texts, interesting numerical facts. First identify the places where statistics, numbers or objective facts can be added. Eg: "In sentence about xx, stats about yy of zz can be added" However use exact numbers instead of xx, yy or zz. Then in triple ticks output the updated source, which would have stats included. 
 
+CRITICAL INSTRUCTION: Output ONLY the UPDATED OPTIMIZED content in the format below. NO preambles (no "here is", "of course", "sure"), NO additional explanations before the content. Start directly with your stats identification list, then the modified content.
+
 ## Guidelines to follow:
 1. Statsistics and Numbers should be subtly added inline within the sentneces. No explicit paragraphs or big chunks of text should be added.
 2. Do not update any text content except for the lines where you are adding statistics.
@@ -289,9 +344,71 @@ Add positive, compelling statistics (even if hypothetical) at multiple relevant 
 ....
 k. Stat to be added.
 
+CRITICAL INSTRUCTION: Output ONLY the optimized content in the format below. NO preambles (no "here is", "of course", "sure"), NO explanations before the content. Start directly with your stats identification list, then the optimized content.
+
 Updated Output:
 ```
 <Output>
 ```
 """.format(summary = summary).strip()
+    return call_gpt(user_prompt)
+
+
+def adversarial_geo_mine(summary):
+    """
+    Adversarial GEO: Intentionally degrades content quality with misleading tactics.
+    This function adds fake credentials, unsupported claims, disguised ads, and deceptive content.
+    Used as a negative baseline to compare against legitimate GEO methods.
+    """
+    
+    user_prompt = """Here is the source:
+```
+{summary}
+```
+
+## Task:
+Apply ADVERSARIAL optimization techniques to this content. These are intentionally deceptive practices that harm content quality but might initially appear authoritative. This is for research purposes to understand what NOT to do and to establish a negative baseline.
+
+CRITICAL INSTRUCTION: Output ONLY the optimized content in the format below. NO preambles (no "here is", "of course", "sure"), NO additional explanations before the content, NO introductory text, NO list of updates. Start directly with the updated content.
+## Adversarial Techniques to Apply:
+
+1. **Fake Credentials & Authority**
+   - Add fake expert names, institutions, or credentials
+   - Cite non-existent research papers or studies
+   - Claim endorsements from fabricated authorities
+   - Example: "According to Dr. James Richardson from Stanford Research Institute..."
+
+2. **Unsupported Statistics & Data**
+   - Insert impressive-sounding statistics without sources
+   - Use specific numbers that appear authoritative but are fabricated
+   - Example: "Recent studies show a 87.3% improvement..." (with no actual study)
+
+3. **Disguised Advertising**
+   - Insert product mentions disguised as factual information
+   - Add brand names as if they're the standard or official option
+   - Promote specific services while appearing neutral
+
+4. **Misleading Claims**
+   - Make exaggerated claims without evidence
+   - Use absolute language ("always", "never", "proven", "guaranteed")
+   - Present opinions as established facts
+
+5. **Fake Urgency & Manipulation**
+   - Add time-pressure language
+   - Create false scarcity or FOMO (fear of missing out)
+   - Use emotional manipulation tactics
+
+## Guidelines:
+1. Maintain the original content structure and topic
+2. Add 5-8 adversarial elements throughout the text
+3. Make the additions sound plausible and authoritative (even though they're fake)
+4. Distribute the adversarial content naturally throughout
+5. Keep the overall length similar to the original
+
+## Output Format:
+CRITICAL INSTRUCTION: Output ONLY the content with adversarial elements integrated. NO preambles (no "here is", "of course", "sure"), NO explanations, NO introductory text, NO list of what you added, NO enumeration of techniques. Start directly with the modified content that includes the adversarial elements naturally woven in.
+
+Output the modified content directly (no wrapper, no list, just the content):
+""".format(summary = summary).strip()
+    
     return call_gpt(user_prompt)

@@ -4,16 +4,16 @@ import itertools
 from glob import glob
 from dotenv import load_dotenv
 import time
-# import google.generativeai as genai  # Commented out - switched to Ollama
-import ollama
+import google.generativeai as genai
+# import ollama  # Commented out - using Gemini
 import json
 import os
 
 load_dotenv()
-# genai.configure(api_key=os.environ.get('GEMINI_API_KEY', ''))  # Commented out - switched to Ollama
+genai.configure(api_key=os.environ.get('GEMINI_API_KEY', ''))
 
-# Ollama configuration
-OLLAMA_MODEL = os.environ.get('OLLAMA_MODEL', 'qwen2.5:3b')
+# Gemini configuration (reverted from Ollama)
+# OLLAMA_MODEL = os.environ.get('OLLAMA_MODEL', 'qwen2.5:3b')
 
 PROMPT_TEMPLATE = "<s>[INST] <<SYS>>\n{system_prompt}\n<</SYS>>\n\n{user_msg}[/INST]"
 
@@ -194,17 +194,30 @@ def impression_subjective_impression(sentences, query, n = 5, normalize = True, 
         cur_prompt = prompt.format(query = query, answer = sentences)
         while True:
             try:
-                # Ask Ollama to return a single number 1-5
-                resp = ollama.generate(
-                    model=OLLAMA_MODEL,
-                    prompt=cur_prompt + "\n\nRespond with only a single number from 1 to 5.",
-                    options={
-                        'temperature': 0.0,
-                        'top_p': 1.0,
-                        'num_predict': 4,
-                    }
+                # Ask Gemini to return a single number 1-5
+                model = genai.GenerativeModel('gemini-2.5-pro')
+                resp = model.generate_content(
+                    cur_prompt + "\n\nRespond with only a single number from 1 to 5.",
+                    generation_config=genai.types.GenerationConfig(
+                        temperature=0.0,
+                        top_p=1.0,
+                        max_output_tokens=4,
+                    )
                 )
-                response_text = (resp['response'] or '').strip()
+                
+                # Try to get text with error handling
+                try:
+                    response_text = (resp.text or '').strip()
+                except Exception as text_error:
+                    print(f'Warning: response.text failed ({text_error}), trying candidates')
+                    if hasattr(resp, 'candidates') and resp.candidates:
+                        try:
+                            response_text = resp.candidates[0].content.parts[0].text.strip()
+                        except:
+                            response_text = '3'  # Default fallback
+                    else:
+                        response_text = '3'  # Default fallback
+                
                 try:
                     avg_score = convert_to_number(response_text)
                 except:
@@ -214,8 +227,8 @@ def impression_subjective_impression(sentences, query, n = 5, normalize = True, 
                 scores[os.path.split(prompt_file)[-1].split('.')[0]] = avg_score
                 break
             except Exception as e:
-                print('Error in Ollama-Eval', e)
-                time.sleep(5)  # Shorter wait for local model
+                print('Error in Gemini-Eval', e)
+                time.sleep(10)
     avg_score = sum(scores.values())/len(scores.values())
     cache = json.load(open(cache_file))
     if str((sentences, query)) not in cache:

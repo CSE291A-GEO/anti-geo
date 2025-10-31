@@ -22,7 +22,9 @@ from geo_functions import *
 def identity(summary, source=None):
     return summary
 
+# Ordered dictionary - adversarial method comes FIRST
 GEO_METHODS = {
+    'adversarial_geo_mine': adversarial_geo_mine,  # ADVERSARIAL: Negative baseline with deceptive practices
     'identity': identity,
     'fluent_gpt': fluent_optimization_gpt,
     'unique_words_gpt': unique_words_optimization_gpt,
@@ -37,6 +39,9 @@ GEO_METHODS = {
 
 
 if __name__ == '__main__':
+    import time as time_module
+    start_time = time_module.time()
+    
     # Same data intake as run_geo.py
     dataset = load_dataset("GEO-Optim/geo-bench", 'test')
     
@@ -44,6 +49,12 @@ if __name__ == '__main__':
     
     print("="*80)
     print("CREATING OPTIMIZATION DATASET")
+    print("="*80)
+    print(f"Total queries in dataset: {len(dataset['test'])}")
+    print(f"Optimization methods: {len(GEO_METHODS)}")
+    print(f"Methods: {', '.join(GEO_METHODS.keys())}")
+    print()
+    print("Starting optimization process...")
     print("="*80)
     print()
     
@@ -60,77 +71,126 @@ if __name__ == '__main__':
         # Get the target source to optimize
         original_text = dataset_sources[sugg_idx]
         
+        query_start_time = time_module.time()
         print(f"[{i+1}/{len(dataset['test'])}] Query: {query[:60]}...")
-        print(f"  Optimizing source [{sugg_idx}]: {k['sources'][sugg_idx].get('url', 'N/A')}")
+        print(f"  Target source index: [{sugg_idx}]")
+        print(f"  Source URL: {k['sources'][sugg_idx].get('url', 'N/A')}")
+        print(f"  Tags: {', '.join(k.get('tags', [])[:3])}{'...' if len(k.get('tags', [])) > 3 else ''}")
         
-        # Create record with original source
+        # Apply ALL 10 GEO methods SEQUENTIALLY to the target source
+        # Each optimization builds on the previous one
+        current_text = original_text
+        method_num = 0
+        total_methods = len(GEO_METHODS)
+        
+        print(f"  Applying {total_methods} optimizations sequentially...")
+        
+        for method_name, method_func in GEO_METHODS.items():
+            method_num += 1
+            try:
+                print(f"    [{method_num}/{total_methods}] Applying: {method_name}...", flush=True)
+                print(f"        Input length: {len(current_text)} chars", flush=True)
+                
+                optimized_text = method_func(current_text)
+                
+                if optimized_text and len(optimized_text) > 100:  # Sanity check
+                    output_len = len(optimized_text)
+                    change_pct = ((output_len - len(current_text)) / len(current_text)) * 100
+                    print(f"        Output length: {output_len} chars ({change_pct:+.1f}%)", flush=True)
+                    print(f"        Status: ✓ Success", flush=True)
+                    # Update current_text for next optimization
+                    current_text = optimized_text
+                else:
+                    print(f"        Status: ✗ Empty or too short, keeping previous version", flush=True)
+            except Exception as e:
+                print(f"        Status: ✗ Error: {str(e)[:80]}, keeping previous version", flush=True)
+        
+        # Create ONE record with the final optimized text (after all 10 optimizations)
+        final_optimized_text = current_text
+        
+        print(f"  Final optimization: {len(final_optimized_text)} chars (original: {len(original_text)} chars)")
+        print(f"  Total change: {((len(final_optimized_text) - len(original_text)) / len(original_text)) * 100:+.1f}%")
+        
         record = {
             'query': query,
-            'source_index': sugg_idx,
-            'source_url': k['sources'][sugg_idx].get('url', ''),
+            'sugg_idx': sugg_idx,
             'tags': k.get('tags', []),
-            'original_source': original_text,
-            'optimizations': {}
+            'sources': []
         }
         
-        # Apply each GEO method to the target source
-        for method_name, method_func in GEO_METHODS.items():
-            try:
-                print(f"    {method_name}...", end=' ', flush=True)
-                optimized_text = method_func(original_text)
-                record['optimizations'][method_name] = optimized_text
-                print("✓")
-            except Exception as e:
-                print(f"✗ ({str(e)[:50]})")
-                record['optimizations'][method_name] = None
+        # Copy all sources with their original structure
+        for src_idx, source in enumerate(k['sources']):
+            source_copy = {
+                'url': source.get('url', ''),
+                'raw_text': source.get('raw_text', ''),
+                'cleaned_text': source.get('cleaned_text', '')
+            }
+            
+            # Replace cleaned_text of target source with FINAL optimized version
+            if src_idx == sugg_idx:
+                source_copy['cleaned_text'] = final_optimized_text
+            
+            record['sources'].append(source_copy)
         
         optimization_records.append(record)
+        
+        query_elapsed = time_module.time() - query_start_time
+        print(f"  Query completed in {query_elapsed:.1f}s")
         print()
         
         # TODO: Remove after debugging - process only first query
-        break
+        # break
     
     # Save to file
+    total_elapsed = time_module.time() - start_time
     output_file = 'optimization_dataset.json'
-    print(f"Saving to {output_file}...")
+    
+    print()
+    print("="*80)
+    print("SAVING DATASET")
+    print("="*80)
+    print(f"Output file: {output_file}")
+    print(f"Writing {len(optimization_records)} records...")
+    
     with open(output_file, 'w', encoding='utf-8') as f:
         json.dump(optimization_records, f, indent=2, ensure_ascii=False)
     
-    print(f"✓ Saved {len(optimization_records)} records")
+    print(f"✓ Saved successfully")
+    print(f"Total time: {total_elapsed:.1f}s ({total_elapsed/60:.1f} minutes)")
     
     # Print statistics
     print()
     print("="*80)
     print("STATISTICS")
     print("="*80)
-    print(f"Total records: {len(optimization_records)}")
-    print(f"Optimization methods per record: {len(GEO_METHODS)}")
     
-    # Calculate success rates
-    method_success = {method: 0 for method in GEO_METHODS}
-    for record in optimization_records:
-        for method, result in record['optimizations'].items():
-            if result is not None:
-                method_success[method] += 1
-    
+    print(f"Total queries processed: {len(optimization_records)}")
+    print(f"Total dataset records created: {len(optimization_records)}")
+    print(f"Optimizations per record: {len(GEO_METHODS)} (applied sequentially)")
     print()
-    print("Success rates:")
-    for method, count in method_success.items():
-        rate = (count / len(optimization_records)) * 100 if optimization_records else 0
-        print(f"  {method:30s} {count}/{len(optimization_records)} ({rate:.1f}%)")
+    print("Optimization pipeline:")
+    for idx, method_name in enumerate(GEO_METHODS.keys(), 1):
+        print(f"  {idx}. {method_name}")
     
     print()
     print(f"✓ Dataset saved to: {output_file}")
     print()
     print("Example record structure:")
     if optimization_records:
+        example_record = optimization_records[0]
+        
+        # Find the optimized source (at sugg_idx)
+        optimized_source = example_record['sources'][example_record['sugg_idx']]
+        
         print(json.dumps({
-            'query': optimization_records[0]['query'],
-            'source_index': optimization_records[0]['source_index'],
-            'original_source': optimization_records[0]['original_source'][:100] + '...',
-            'optimizations': {
-                method: (text[:100] + '...' if text else None)
-                for method, text in list(optimization_records[0]['optimizations'].items())[:3]
+            'query': example_record['query'][:80] + '...',
+            'sugg_idx': example_record['sugg_idx'],
+            'tags': example_record['tags'][:3],
+            'num_sources': len(example_record['sources']),
+            'optimized_source_preview': {
+                'url': optimized_source['url'][:50] + '...',
+                'cleaned_text_preview': optimized_source['cleaned_text'][:150] + '...',
+                'optimizations_applied': list(GEO_METHODS.keys())
             }
         }, indent=2))
 
