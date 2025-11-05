@@ -45,12 +45,26 @@ if __name__ == '__main__':
     # Same data intake as run_geo.py
     dataset = load_dataset("GEO-Optim/geo-bench", 'test')
     
-    optimization_records = []
+    # Output file setup - we'll append to this incrementally
+    output_file = 'optimization_dataset.json'
+    
+    # Check if file exists and load existing records
+    if os.path.exists(output_file):
+        print(f"Loading existing dataset from {output_file}...")
+        with open(output_file, 'r', encoding='utf-8') as f:
+            optimization_records = json.load(f)
+        print(f"  Loaded {len(optimization_records)} existing records")
+        starting_index = len(optimization_records)
+    else:
+        optimization_records = []
+        starting_index = 0
     
     print("="*80)
     print("CREATING OPTIMIZATION DATASET")
     print("="*80)
     print(f"Total queries in dataset: {len(dataset['test'])}")
+    print(f"Already processed: {starting_index}")
+    print(f"Remaining to process: {len(dataset['test']) - starting_index}")
     print(f"Optimization methods: {len(GEO_METHODS)}")
     print(f"Methods: {', '.join(GEO_METHODS.keys())}")
     print()
@@ -59,6 +73,10 @@ if __name__ == '__main__':
     print()
     
     for i, k in enumerate(dataset['test']):
+        # Skip already processed queries
+        if i < starting_index:
+            continue
+            
         query = k['query']
         sugg_idx = int(k['sugg_idx'])
         
@@ -134,28 +152,29 @@ if __name__ == '__main__':
         
         optimization_records.append(record)
         
+        # Save immediately after each query is processed
+        print(f"  Saving progress to {output_file}...")
+        with open(output_file, 'w', encoding='utf-8') as f:
+            json.dump(optimization_records, f, indent=2, ensure_ascii=False)
+        
         query_elapsed = time_module.time() - query_start_time
         print(f"  Query completed in {query_elapsed:.1f}s")
+        print(f"  Total records so far: {len(optimization_records)}/{len(dataset['test'])}")
         print()
         
         # TODO: Remove after debugging - process only first query
         # break
     
-    # Save to file
+    # Final summary
     total_elapsed = time_module.time() - start_time
-    output_file = 'optimization_dataset.json'
     
     print()
     print("="*80)
-    print("SAVING DATASET")
+    print("PROCESSING COMPLETE")
     print("="*80)
     print(f"Output file: {output_file}")
-    print(f"Writing {len(optimization_records)} records...")
-    
-    with open(output_file, 'w', encoding='utf-8') as f:
-        json.dump(optimization_records, f, indent=2, ensure_ascii=False)
-    
-    print(f"✓ Saved successfully")
+    print(f"Total records: {len(optimization_records)}")
+    print(f"✓ All records saved incrementally")
     print(f"Total time: {total_elapsed:.1f}s ({total_elapsed/60:.1f} minutes)")
     
     # Print statistics

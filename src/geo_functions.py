@@ -53,10 +53,21 @@ def call_gpt(user_prompt, system_prompt = COMMON_SYSTEM_PROMPT, model = None, te
                 generation_config=genai.types.GenerationConfig(
                     temperature=float(temperature),
                     top_p=1.0,
-                    max_output_tokens=3192,
+                    max_output_tokens=8000,  # Increased to handle longer optimizations
                     candidate_count=num_completions if num_completions == 1 else 1,
                 )
             )
+            
+            # Check if we got MAX_TOKENS with empty content - need to reduce input
+            if hasattr(responses, 'candidates') and responses.candidates:
+                candidate = responses.candidates[0]
+                if (hasattr(candidate, 'finish_reason') and 
+                    candidate.finish_reason == 'MAX_TOKENS' and
+                    (not hasattr(candidate.content, 'parts') or len(candidate.content.parts) == 0)):
+                    print(f'Warning: MAX_TOKENS reached with empty output, reducing input size')
+                    user_prompt = user_prompt[:int(len(user_prompt) * 0.7)]
+                    continue
+            
             break
         except Exception as e:
             print('Error',e)
@@ -143,8 +154,13 @@ def call_gpt(user_prompt, system_prompt = COMMON_SYSTEM_PROMPT, model = None, te
     if extracted_text is None and hasattr(responses, 'candidates'):
         # Try to get from candidates
         try:
-            if responses.candidates:
-                extracted_text = responses.candidates[0].content.parts[0].text
+            if responses.candidates and len(responses.candidates) > 0:
+                candidate = responses.candidates[0]
+                if hasattr(candidate, 'content') and hasattr(candidate.content, 'parts'):
+                    if len(candidate.content.parts) > 0:
+                        extracted_text = candidate.content.parts[0].text
+                    else:
+                        print(f'Warning: candidate.content.parts is empty (finish_reason: {candidate.finish_reason})')
         except Exception as e:
             print(f'Warning: candidates extraction failed: {e}')
     
