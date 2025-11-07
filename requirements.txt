@@ -9,4 +9,7 @@ datasets
 nltk
 numpy
 requests
-# ollama  # Commented out - using Gemini
+sentence-transformers
+scikit-learn
+sentence-transformers
+scikit-learn
