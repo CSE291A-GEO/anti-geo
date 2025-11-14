@@ -38,7 +38,8 @@ def load_dataset(dataset_path: str) -> List[Dict[str, Any]]:
 
 def score_sources(
     entry: Dict[str, Any],
-    detector: SemanticGEODetector
+    detector: SemanticGEODetector,
+    parsed: bool = True
 ) -> List[Dict[str, Any]]:
     """
     Score all sources in an entry and return ranked results.
@@ -46,6 +47,7 @@ def score_sources(
     Args:
         entry: Dataset entry containing sources
         detector: Initialized SemanticGEODetector
+        parsed: Whether to use parsed mode (extracts GEO patterns first)
     
     Returns:
         List of source dictionaries with added GEO scores, ranked by score (highest first)
@@ -65,8 +67,8 @@ def score_sources(
             # Skip sources without text
             continue
         
-        # Calculate GEO score with parsed mode enabled (uses Gemini to extract relevant patterns)
-        s_geo_max, top_matches = detector.score(text, top_k=3, parsed=True)
+        # Calculate GEO score with specified parsed mode
+        s_geo_max, top_matches = detector.score(text, top_k=3, parsed=parsed)
         
         # Create scored source entry
         scored_source = {
@@ -75,7 +77,8 @@ def score_sources(
             's_geo_max': float(s_geo_max),
             'top_matches': [(pid, float(score)) for pid, score in top_matches],
             'text_length': len(text),
-            'text_preview': text[:200] + '...' if len(text) > 200 else text
+            'text_preview': text[:200] + '...' if len(text) > 200 else text,
+            'parsed_mode': parsed
         }
         
         scored_sources.append(scored_source)
@@ -118,12 +121,15 @@ def main():
     
     # Process all entries
     for entry_idx, entry in enumerate(dataset):
-        # to avoid rate limiting, sleep for 25 seconds
+        # to avoid rate limiting, sleep for 25 seconds between datapoints
         time.sleep(25)
 
         # stop at 50 entries
         if total_entries >= 50:
             break
+
+        # Start timer for this entry processing
+        entry_start_time = time.time()
 
         query = entry.get('query', 'N/A')
         num_sources = len(entry.get('sources', []))
@@ -151,12 +157,21 @@ def main():
             marker = " ⭐ [ACTUAL GEO]" if orig_idx == sugg_idx else ""
             print(f"  Index {orig_idx}: {url}{marker}")
         
-        # Score all sources
-        scored_sources = score_sources(entry, detector)
+        # Score all sources with parsed=True first
+        print(f"\nScoring sources with parsed=True...")
+        scored_sources = score_sources(entry, detector, parsed=True)
         
         if not scored_sources:
             print(f"Warning: No sources were scored for this entry")
             continue  # Skip entries with no scored sources
+        
+        # Check if all scores are 0 - if so, re-run with parsed=False
+        all_scores_zero = all(source['s_geo_max'] == 0.0 for source in scored_sources)
+        
+        if all_scores_zero:
+            print(f"  All GEO scores are 0.0 - re-running with parsed=False...")
+            scored_sources = score_sources(entry, detector, parsed=False)
+            print(f"  Re-scored with parsed=False")
         
         # Print ranked sources with their original indices
         print(f"\nRanked Sources (by GEO Score, highest first):")
@@ -188,13 +203,22 @@ def main():
         discrepancy = actual_geo_ranking - 1  # 0 = perfect (rank 1), 1 = rank 2, etc.
         abs_discrepancy = abs(discrepancy)
         
+        # Determine which parsed mode was used
+        parsed_mode_used = scored_sources[0]['parsed_mode'] if scored_sources else True
+        
+        # Calculate processing time before printing evaluation
+        entry_end_time = time.time()
+        entry_processing_time_ms = (entry_end_time - entry_start_time) * 1000  # Convert to milliseconds
+        
         print(f"\nEvaluation:")
+        print(f"  Parsed Mode Used: {parsed_mode_used}")
         print(f"  Actual GEO Source (index {sugg_idx}): Rank {actual_geo_ranking} / {len(scored_sources)}")
         print(f"  Discrepancy: {abs_discrepancy} (absolute value of ranking - 1 = |{actual_geo_ranking} - 1|)")
         if len(scored_sources) > 0:
             print(f"  Actual GEO Score: {actual_geo_source_info['s_geo_max']:.4f}")
             print(f"  Top Score: {scored_sources[0]['s_geo_max']:.4f}")
             print(f"  Score Difference: {scored_sources[0]['s_geo_max'] - actual_geo_source_info['s_geo_max']:.4f}")
+        print(f"  Processing Latency: {entry_processing_time_ms:.2f} ms")
         
         # Update tracking
         if abs_discrepancy > max_discrepancy:
@@ -222,12 +246,14 @@ def main():
             'sugg_idx': sugg_idx,
             'total_sources': num_sources,
             'scored_sources_count': len(scored_sources),
+            'parsed_mode_used': parsed_mode_used,
             'actual_geo_ranking': actual_geo_ranking,
             'discrepancy': abs_discrepancy,
             'actual_geo_score': actual_geo_source_info['s_geo_max'],
             'top_score': scored_sources[0]['s_geo_max'] if scored_sources else 0.0,
             'score_difference': (scored_sources[0]['s_geo_max'] - actual_geo_source_info['s_geo_max']) if scored_sources else 0.0,
             'actual_geo_url': actual_geo_source_info['url'],
+            'processing_latency_ms': round(entry_processing_time_ms, 2),  # Latency in milliseconds
             'ranked_sources': [
                 {
                     'rank': rank,
@@ -242,7 +268,8 @@ def main():
         all_entry_results.append(entry_result)
 
         
-
+        if entry_idx == 100:
+            break
         # break # TODO: Remove this?
 
     
@@ -289,7 +316,7 @@ def main():
     }
     
     # Save results to JSON file
-    output_path = project_root / 'parsed_semantic_matching.json'
+    output_path = project_root / 'parsed_semantic_matching_fallback.json'
     print(f"\n{'='*80}")
     print(f"Saving results to: {output_path}")
     with open(output_path, 'w', encoding='utf-8') as f:

@@ -1,0 +1,10 @@
+{
+  "train_accuracy": 1.0,
+  "test_accuracy": 0.94,
+  "train_samples": 200,
+  "test_samples": 50,
+  "positive_samples_train": 40,
+  "negative_samples_train": 160,
+  "positive_samples_test": 10,
+  "negative_samples_test": 40
+}

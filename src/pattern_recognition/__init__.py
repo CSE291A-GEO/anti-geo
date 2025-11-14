@@ -26,6 +26,9 @@ from .pattern_detectors import (
     RuleBasedGEODetector
 )
 
+# Import ranking analyzer
+from .ranking_analyzer import RankingAnalyzer
+
 __all__ = [
     # Semantic similarity-based detection
     'GEO_PATTERNS',
@@ -40,6 +43,8 @@ __all__ = [
     'score_geo_semantic_005',
     'calculate_rule_based_geo_score',
     'calculate_all_pattern_scores',
-    'RuleBasedGEODetector'
+    'RuleBasedGEODetector',
+    # Ranking-based detection
+    'RankingAnalyzer'
 ]
 

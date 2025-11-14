@@ -74,15 +74,18 @@ if __name__ == '__main__':
     
     for i, k in enumerate(dataset['test']):
         # Skip already processed queries
+
+        starting_index = 420
         if i < starting_index:
             continue
             
         query = k['query']
         sugg_idx = int(k['sugg_idx'])
         
-        # Extract sources from dataset (same as run_geo.py)
+        # Extract sources from dataset - use raw_text as input for optimization
+        # (optimized result will be stored in cleaned_text)
         dataset_sources = [
-            s.get('cleaned_text', s.get('raw_text', '')) 
+            s.get('raw_text', s.get('cleaned_text', '')) 
             for s in k['sources']
         ]
         
@@ -145,6 +148,7 @@ if __name__ == '__main__':
             }
             
             # Replace cleaned_text of target source with FINAL optimized version
+            # (optimization is applied on raw_text, result stored in cleaned_text)
             if src_idx == sugg_idx:
                 source_copy['cleaned_text'] = final_optimized_text
             
