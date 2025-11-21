@@ -25,6 +25,8 @@ try:
         entry_argmax_predictions,
         calculate_ranking_accuracy,
     )
+    from .excessiveness_features import extract_excessiveness_features, get_num_features as get_excessiveness_num_features
+    from .text_quality_features import extract_text_quality_features, get_num_features as get_text_quality_num_features
 except ImportError:
     from semantic_features import SemanticFeatureExtractor
     from bias_utils import (
@@ -32,6 +34,8 @@ except ImportError:
         entry_argmax_predictions,
         calculate_ranking_accuracy,
     )
+    from excessiveness_features import extract_excessiveness_features, get_num_features as get_excessiveness_num_features
+    from text_quality_features import extract_text_quality_features, get_num_features as get_text_quality_num_features
 
 
 def _group_by_entry(
@@ -100,18 +104,25 @@ class OrdinalLogisticRegression:
         self.intercept_ = None
         self.thresholds_ = None  # Thresholds for cumulative probabilities
     
-    def _ordinal_log_loss(self, params, X, y, n_features):
+    def _ordinal_log_loss(self, params, X, y, n_features, entry_groups=None, 
+                         use_extreme_penalty=False, use_margin_loss=False, 
+                         margin=0.2, extreme_penalty_weight=2.0):
         """
-        Compute ordinal logistic loss (negative log-likelihood).
+        Compute ordinal logistic loss (negative log-likelihood) with optional enhancements.
         
         Args:
             params: Flattened parameters [coefficients, thresholds]
             X: Feature matrix
             y: Ordinal labels (0, 1, 2, ...)
             n_features: Number of features
+            entry_groups: List of entry groups for ranking loss (optional)
+            use_extreme_penalty: If True, add penalty for extreme under-confidence
+            use_margin_loss: If True, add margin-based ranking loss
+            margin: Minimum gap between GEO and non-GEO probabilities
+            extreme_penalty_weight: Weight for extreme failure penalty
             
         Returns:
-            Negative log-likelihood
+            Negative log-likelihood + penalties
         """
         coef = params[:n_features].reshape(-1, 1)
         thresholds = params[n_features:]
@@ -144,16 +155,78 @@ class OrdinalLogisticRegression:
         
         # Add L2 regularization
         reg_term = self.alpha * np.sum(coef ** 2)
+        base_loss = -(log_likelihood / n_samples) + reg_term
         
-        return -(log_likelihood / n_samples) + reg_term
+        # Add extreme failure penalty
+        extreme_penalty = 0.0
+        if use_extreme_penalty and entry_groups is not None:
+            for group in entry_groups:
+                sugg_idx = group.get('sugg_idx')
+                if sugg_idx is None:
+                    continue
+                
+                # Find GEO source in this group
+                source_indices = group.get('source_indices', [])
+                for i, idx in enumerate(group['indices']):
+                    if i < len(source_indices) and source_indices[i] == sugg_idx:
+                        if idx < len(z):
+                            z_geo = z[idx, 0]
+                            geo_prob = expit(z_geo - thresholds[-1])  # GEO probability (class 1)
+                            
+                            # Heavy penalty if GEO prob < 0.1
+                            if geo_prob < 0.1:
+                                extreme_penalty += extreme_penalty_weight * (0.1 - geo_prob)
+                        break
+        
+        # Add margin-based ranking loss
+        margin_loss = 0.0
+        if use_margin_loss and entry_groups is not None:
+            for group in entry_groups:
+                sugg_idx = group.get('sugg_idx')
+                if sugg_idx is None:
+                    continue
+                
+                geo_z = None
+                max_non_geo_z = -float('inf')
+                
+                source_indices = group.get('source_indices', [])
+                for i, idx in enumerate(group['indices']):
+                    if idx < len(z) and i < len(source_indices):
+                        source_idx = source_indices[i]
+                        z_val = z[idx, 0]
+                        
+                        if source_idx == sugg_idx:
+                            geo_z = z_val
+                        else:
+                            max_non_geo_z = max(max_non_geo_z, z_val)
+                
+                if geo_z is not None and max_non_geo_z > -float('inf'):
+                    gap = geo_z - max_non_geo_z
+                    # Penalize if gap is too small
+                    if gap < margin:
+                        margin_loss += (margin - gap) ** 2
+        
+        total_loss = base_loss
+        if use_extreme_penalty and entry_groups:
+            total_loss += extreme_penalty / max(len(entry_groups), 1)
+        if use_margin_loss and entry_groups:
+            total_loss += 0.3 * margin_loss / max(len(entry_groups), 1)
+        
+        return total_loss
     
-    def fit(self, X, y):
+    def fit(self, X, y, entry_groups=None, use_extreme_penalty=False, 
+            use_margin_loss=False, margin=0.2, extreme_penalty_weight=2.0):
         """
         Fit the ordinal logistic regression model.
         
         Args:
             X: Feature matrix (n_samples, n_features)
             y: Ordinal labels (n_samples,) with values in [0, n_classes-1]
+            entry_groups: List of entry groups for enhanced loss (optional)
+            use_extreme_penalty: If True, add penalty for extreme under-confidence
+            use_margin_loss: If True, add margin-based ranking loss
+            margin: Minimum gap between GEO and non-GEO probabilities
+            extreme_penalty_weight: Weight for extreme failure penalty
         """
         n_samples, n_features = X.shape
         
@@ -166,11 +239,19 @@ class OrdinalLogisticRegression:
         
         params_init = np.concatenate([coef_init, thresholds_init])
         
+        # Store for loss function
+        self._entry_groups = entry_groups
+        self._use_extreme_penalty = use_extreme_penalty
+        self._use_margin_loss = use_margin_loss
+        self._margin = margin
+        self._extreme_penalty_weight = extreme_penalty_weight
+        
         # Optimize
         result = minimize(
             self._ordinal_log_loss,
             params_init,
-            args=(X, y, n_features),
+            args=(X, y, n_features, entry_groups, use_extreme_penalty, 
+                  use_margin_loss, margin, extreme_penalty_weight),
             method='L-BFGS-B',
             options={'maxiter': self.max_iter}
         )
@@ -243,7 +324,16 @@ class LogisticOrdinalGEODetector:
         scaler_path: Optional[Path] = None,
         embedding_model_name: str = 'all-MiniLM-L6-v2',
         use_semantic_features: bool = False,
-        pca_components: Optional[int] = None
+        pca_components: Optional[int] = None,
+        # New toggles for improvements
+        use_excessiveness_features: bool = False,
+        use_relative_features: bool = False,
+        use_text_quality_features: bool = False,
+        enhanced_oversampling_weight: Optional[float] = None,  # None = use default (3.0), else use this value
+        use_extreme_penalty: bool = False,
+        use_margin_loss: bool = False,
+        margin: float = 0.2,
+        extreme_penalty_weight: float = 2.0
     ):
         """
         Initialize the Logistic Ordinal detector.
@@ -253,6 +343,14 @@ class LogisticOrdinalGEODetector:
             scaler_path: Path to saved scaler (pickle file)
             embedding_model_name: Name of the sentence transformer model for embeddings
             use_semantic_features: If True, include individual semantic matching pattern scores as features
+            use_excessiveness_features: If True, add excessiveness features for semantic patterns
+            use_relative_features: If True, add relative features comparing sources within entries
+            use_text_quality_features: If True, add text quality features
+            enhanced_oversampling_weight: Oversampling weight (None = default 3.0, else use this value)
+            use_extreme_penalty: If True, add penalty for extreme under-confidence in loss
+            use_margin_loss: If True, add margin-based ranking loss
+            margin: Minimum gap between GEO and non-GEO probabilities
+            extreme_penalty_weight: Weight for extreme failure penalty
         """
         self.model = None
         self.scaler = StandardScaler()
@@ -263,6 +361,14 @@ class LogisticOrdinalGEODetector:
         self.embedding_model = SentenceTransformer(embedding_model_name)
         self.embedding_dim = self.embedding_model.get_sentence_embedding_dimension()
         self.use_semantic_features = use_semantic_features
+        self.use_excessiveness_features = use_excessiveness_features
+        self.use_relative_features = use_relative_features
+        self.use_text_quality_features = use_text_quality_features
+        self.enhanced_oversampling_weight = enhanced_oversampling_weight
+        self.use_extreme_penalty = use_extreme_penalty
+        self.use_margin_loss = use_margin_loss
+        self.margin = margin
+        self.extreme_penalty_weight = extreme_penalty_weight
         
         # Initialize semantic feature extractor if needed
         self.semantic_extractor = None
@@ -273,19 +379,24 @@ class LogisticOrdinalGEODetector:
         self.feature_names = [f'embedding_dim_{i}' for i in range(self.embedding_dim)]
         if use_semantic_features:
             self.feature_names.extend(self.semantic_extractor.get_feature_names())
+            if use_excessiveness_features:
+                self.feature_names.extend([f'excessiveness_{i}' for i in range(get_excessiveness_num_features())])
+        if use_text_quality_features:
+            self.feature_names.extend([f'text_quality_{i}' for i in range(get_text_quality_num_features())])
         
         if model_path and model_path.exists():
             self.load_model(model_path, scaler_path)
     
-    def extract_features(self, cleaned_text: str) -> np.ndarray:
+    def extract_features(self, cleaned_text: str, entry_features: Optional[List[np.ndarray]] = None) -> np.ndarray:
         """
         Extract features from cleaned_text.
         
         Args:
             cleaned_text: The cleaned text to embed
+            entry_features: Optional list of features for other sources in the same entry (for relative features)
             
         Returns:
-            numpy array of features (embeddings + optionally semantic pattern scores)
+            numpy array of features (embeddings + optionally semantic pattern scores + new features)
         """
         if not cleaned_text:
             base_features = np.zeros(self.embedding_dim)
@@ -296,12 +407,72 @@ class LogisticOrdinalGEODetector:
                 print(f"    Warning: Failed to generate embedding: {str(e)[:50]}")
                 base_features = np.zeros(self.embedding_dim)
         
+        features_list = [base_features]
+        
         # Add semantic pattern scores if enabled
         if self.use_semantic_features and self.semantic_extractor:
             semantic_scores = self.semantic_extractor.extract_pattern_scores(cleaned_text)
-            return np.concatenate([base_features, semantic_scores])
+            features_list.append(semantic_scores)
+            
+            # Add excessiveness features if enabled
+            if self.use_excessiveness_features:
+                excessiveness = extract_excessiveness_features(semantic_scores)
+                features_list.append(excessiveness)
+        
+        # Add text quality features if enabled
+        if self.use_text_quality_features:
+            text_quality = extract_text_quality_features(cleaned_text)
+            features_list.append(text_quality)
+        
+        # Add relative features if enabled and entry_features provided
+        if self.use_relative_features and entry_features is not None and len(entry_features) > 0:
+            current_features = np.concatenate(features_list)
+            relative = self._extract_relative_features(current_features, entry_features)
+            features_list.append(relative)
+        
+        return np.concatenate(features_list)
+    
+    def _extract_relative_features(self, source_features: np.ndarray, 
+                                  entry_features: List[np.ndarray]) -> np.ndarray:
+        """
+        Extract features comparing this source to others in its entry.
+        """
+        if not entry_features:
+            # Return zeros if no other sources
+            num_semantic = 5 if self.use_semantic_features else 0
+            return np.zeros(num_semantic * 2)  # 2 features per semantic pattern (max ratio, mean ratio)
+        
+        entry_features_array = np.array(entry_features)
+        
+        # Find semantic feature indices (after embedding dim)
+        embedding_end = self.embedding_dim
+        semantic_start = embedding_end
+        semantic_end = semantic_start + (5 if self.use_semantic_features else 0)
+        
+        if self.use_semantic_features and semantic_end > semantic_start:
+            semantic_scores = source_features[semantic_start:semantic_end]
+            entry_semantic_scores = entry_features_array[:, semantic_start:semantic_end]
+            
+            relative_features = []
+            
+            for i in range(len(semantic_scores)):
+                # This source's score relative to max in entry
+                max_in_entry = np.max(entry_semantic_scores[:, i]) if len(entry_semantic_scores) > 0 else 0
+                if max_in_entry > 0:
+                    relative_features.append(semantic_scores[i] / max_in_entry)
+                else:
+                    relative_features.append(0.0)
+                
+                # This source's score relative to mean in entry
+                mean_in_entry = np.mean(entry_semantic_scores[:, i]) if len(entry_semantic_scores) > 0 else 0
+                if mean_in_entry > 0:
+                    relative_features.append(semantic_scores[i] / mean_in_entry)
+                else:
+                    relative_features.append(0.0)
+            
+            return np.array(relative_features)
         else:
-            return base_features
+            return np.zeros(0)
     
     def prepare_training_data(
         self, 
@@ -341,17 +512,30 @@ class LogisticOrdinalGEODetector:
                 continue
             
             # Extract features for each source in this entry
+            # First pass: collect all texts for relative features
+            entry_texts = []
             for source_idx, source in enumerate(sources):
                 cleaned_text = source.get('cleaned_text', '')
-                if not cleaned_text:
-                    continue
-                
+                if cleaned_text:
+                    entry_texts.append((source_idx, cleaned_text))
+            
+            # Second pass: extract features with relative context
+            for source_idx, cleaned_text in entry_texts:
                 # Label: 2 if this source is the GEO source (sugg_idx), 0 otherwise
                 # Using 2 for GEO to make it the "high" class in ordinal ranking
                 label = 2 if source_idx == sugg_idx else 0
                 
+                # Extract features for other sources in entry (for relative features)
+                entry_features = None
+                if self.use_relative_features:
+                    entry_features = []
+                    for other_idx, other_text in entry_texts:
+                        if other_idx != source_idx:
+                            other_features = self.extract_features(other_text, entry_features=None)
+                            entry_features.append(other_features)
+                
                 # Extract features
-                features = self.extract_features(cleaned_text)
+                features = self.extract_features(cleaned_text, entry_features)
                 
                 X.append(features)
                 y.append(label)
@@ -455,6 +639,17 @@ class LogisticOrdinalGEODetector:
         # Group training data by entry for context-aware training
         train_entry_groups = _group_by_entry(X_train_scaled, y_train_mapped, metadata_train)
         
+        # Prepare entry groups for enhanced loss (if enabled)
+        enhanced_entry_groups = None
+        if self.use_extreme_penalty or self.use_margin_loss:
+            enhanced_entry_groups = []
+            for group in train_entry_groups:
+                enhanced_entry_groups.append({
+                    'indices': group['indices'],
+                    'sugg_idx': group['sugg_idx'],
+                    'source_indices': [metadata_train[i]['source_idx'] for i in group['indices']]
+                })
+        
         # For entry-batched training: collect all sources from entries and train
         X_train_batched = []
         y_train_batched = []
@@ -465,7 +660,35 @@ class LogisticOrdinalGEODetector:
         X_train_batched = np.vstack(X_train_batched)
         y_train_batched = np.array(y_train_batched)
         
-        self.model.fit(X_train_batched, y_train_batched)
+        # Use enhanced oversampling if enabled
+        oversampling_weight = self.enhanced_oversampling_weight if self.enhanced_oversampling_weight is not None else 3.0
+        if oversampling_weight > 1.0:
+            X_train_batched, y_train_batched, metadata_train_batched, texts_train_batched = oversample_positive(
+                X_train_batched, y_train_batched, 
+                [metadata_train[i] for entry_group in train_entry_groups for i in entry_group['indices']],
+                [source_texts[i] for entry_group in train_entry_groups for i in entry_group['indices']],
+                positive_label=1,
+                weight=oversampling_weight
+            )
+            # Re-group after oversampling
+            train_entry_groups = _group_by_entry(X_train_batched, y_train_batched, metadata_train_batched)
+            if enhanced_entry_groups:
+                enhanced_entry_groups = []
+                for group in train_entry_groups:
+                    enhanced_entry_groups.append({
+                        'indices': group['indices'],
+                        'sugg_idx': group['sugg_idx'],
+                        'source_indices': [metadata_train_batched[i]['source_idx'] for i in group['indices']]
+                    })
+        
+        self.model.fit(
+            X_train_batched, y_train_batched,
+            entry_groups=enhanced_entry_groups,
+            use_extreme_penalty=self.use_extreme_penalty,
+            use_margin_loss=self.use_margin_loss,
+            margin=self.margin,
+            extreme_penalty_weight=self.extreme_penalty_weight
+        )
         training_time = time.perf_counter() - training_start
         
         # Evaluate
@@ -782,11 +1005,24 @@ class LogisticOrdinalGEODetector:
         if not sources:
             return []
         
-        # Extract features for all sources
+        # Extract features for all sources (with relative context if enabled)
         features_list = []
-        for source in sources:
-            features = self.extract_features(source)
-            features_list.append(features)
+        if self.use_relative_features:
+            # First pass: extract all features
+            all_features = []
+            for source in sources:
+                features = self.extract_features(source, entry_features=None)
+                all_features.append(features)
+            
+            # Second pass: extract with relative context
+            for i, source in enumerate(sources):
+                entry_features = [all_features[j] for j in range(len(sources)) if j != i]
+                features = self.extract_features(source, entry_features)
+                features_list.append(features)
+        else:
+            for source in sources:
+                features = self.extract_features(source)
+                features_list.append(features)
         
         X = np.array(features_list)
         X_scaled = self.scaler.transform(X)
@@ -879,7 +1115,16 @@ def train_logistic_ordinal_classifier(
     C: float = 1.0,
     use_semantic_features: bool = False,
     model_name: str = 'logistic_ordinal_geo_detector.pkl',
-    pca_components: Optional[int] = None
+    pca_components: Optional[int] = None,
+    # New improvement toggles
+    use_excessiveness_features: bool = False,
+    use_relative_features: bool = False,
+    use_text_quality_features: bool = False,
+    enhanced_oversampling_weight: Optional[float] = None,
+    use_extreme_penalty: bool = False,
+    use_margin_loss: bool = False,
+    margin: float = 0.2,
+    extreme_penalty_weight: float = 2.0
 ) -> LogisticOrdinalGEODetector:
     """
     Train a Logistic Ordinal classifier on optimization dataset.
@@ -916,10 +1161,33 @@ def train_logistic_ordinal_classifier(
     
     # Initialize detector
     print("\nInitializing embedding model...")
-    detector = LogisticOrdinalGEODetector(use_semantic_features=use_semantic_features, pca_components=pca_components)
+    detector = LogisticOrdinalGEODetector(
+        use_semantic_features=use_semantic_features, 
+        pca_components=pca_components,
+        use_excessiveness_features=use_excessiveness_features,
+        use_relative_features=use_relative_features,
+        use_text_quality_features=use_text_quality_features,
+        enhanced_oversampling_weight=enhanced_oversampling_weight,
+        use_extreme_penalty=use_extreme_penalty,
+        use_margin_loss=use_margin_loss,
+        margin=margin,
+        extreme_penalty_weight=extreme_penalty_weight
+    )
     print(f"Embedding model: {detector.embedding_model.get_sentence_embedding_dimension()} dimensions")
     if use_semantic_features:
         print(f"Using semantic pattern features: {detector.semantic_extractor.get_num_features()} additional features")
+        if use_excessiveness_features:
+            print(f"Using excessiveness features: {get_excessiveness_num_features()} additional features")
+    if use_text_quality_features:
+        print(f"Using text quality features: {get_text_quality_num_features()} additional features")
+    if use_relative_features:
+        print(f"Using relative features: comparing sources within entries")
+    if enhanced_oversampling_weight is not None:
+        print(f"Enhanced oversampling weight: {enhanced_oversampling_weight}")
+    if use_extreme_penalty:
+        print(f"Extreme failure penalty enabled (weight: {extreme_penalty_weight})")
+    if use_margin_loss:
+        print(f"Margin-based ranking loss enabled (margin: {margin})")
     if pca_components is not None:
         print(f"PCA enabled: {pca_components} components")
     
@@ -1000,6 +1268,23 @@ if __name__ == '__main__':
                         help='Output directory for saved model')
     parser.add_argument('--model-name', type=str, default='logistic_ordinal_geo_detector.pkl',
                         help='Name of the model file')
+    # New improvement toggles
+    parser.add_argument('--use-excessiveness-features', action='store_true',
+                        help='Add excessiveness features for semantic patterns')
+    parser.add_argument('--use-relative-features', action='store_true',
+                        help='Add relative features comparing sources within entries')
+    parser.add_argument('--use-text-quality-features', action='store_true',
+                        help='Add text quality features')
+    parser.add_argument('--enhanced-oversampling-weight', type=float, default=None,
+                        help='Oversampling weight for GEO samples (None = default 3.0)')
+    parser.add_argument('--use-extreme-penalty', action='store_true',
+                        help='Add penalty for extreme under-confidence in loss function')
+    parser.add_argument('--use-margin-loss', action='store_true',
+                        help='Add margin-based ranking loss')
+    parser.add_argument('--margin', type=float, default=0.2,
+                        help='Minimum gap between GEO and non-GEO probabilities (default: 0.2)')
+    parser.add_argument('--extreme-penalty-weight', type=float, default=2.0,
+                        help='Weight for extreme failure penalty (default: 2.0)')
     
     args = parser.parse_args()
     
@@ -1021,7 +1306,15 @@ if __name__ == '__main__':
         C=args.C,
         use_semantic_features=args.use_semantic_features,
         model_name=args.model_name,
-        pca_components=args.pca_components
+        pca_components=args.pca_components,
+        use_excessiveness_features=args.use_excessiveness_features,
+        use_relative_features=args.use_relative_features,
+        use_text_quality_features=args.use_text_quality_features,
+        enhanced_oversampling_weight=args.enhanced_oversampling_weight,
+        use_extreme_penalty=args.use_extreme_penalty,
+        use_margin_loss=args.use_margin_loss,
+        margin=args.margin,
+        extreme_penalty_weight=args.extreme_penalty_weight
     )
     
     print("\n" + "="*80)
