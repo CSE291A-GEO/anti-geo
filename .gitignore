@@ -161,6 +161,7 @@ dmypy.json
 
 # ignore massive dataset
 optimization_dataset.json
+*.json
 
 # Pyre type checker
 .pyre/
