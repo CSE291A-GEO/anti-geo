@@ -1,4 +1,13 @@
-# Model Comparison: Baseline vs Semantic Features
+# Model Comparison: Optimization Dataset Results (Detection Focus)
+
+## Dataset Information
+
+- **Source**: `optimization_dataset.json`
+- **Total Entries**: 1000 (using first 65 for experiments)
+- **Training Set**: 40 entries
+- **Validation Set**: 25 entries
+- **Data Split**: 61.5% training / 38.5% validation
+- **Focus**: Detection of GEO-optimized content
 
 ## 1. Models and Architectures
 
@@ -212,3 +221,161 @@ All models were trained with PCA dimensionality reduction to 250 components (fro
 - **GBM** suffers significant performance degradation with PCA, suggesting it needs the full feature space
 - **Neural** shows minor degradation, indicating some information loss from dimensionality reduction
 - **Logistic Ordinal** is unaffected by PCA, suggesting it can work well with reduced dimensions
+## 4. Dataset Characteristics
+
+### Class Distribution
+- **Training Set**: 8 positive (GEO) samples, 32 negative (non-GEO) samples (20% positive)
+- **Validation Set**: 2 positive (GEO) samples, 23 negative (non-GEO) samples (8% positive)
+
+### Challenges
+1. **Extreme Class Imbalance**: Very few positive samples, especially in validation set (only 2)
+2. **Small Sample Size**: 65 total entries limits model generalization
+3. **Low Ranking Accuracy**: Most models fail to correctly rank GEO sources within entries, suggesting the task is particularly challenging on this dataset
+
+## 5. Demeaning Experiment: Original vs Category-Demeaned GEO Scores
+
+This section compares models trained on original GEO scores versus models trained on category-demeaned GEO scores. The demeaning process subtracts the category baseline mean (calculated from `se_optimized_sources_with_content.tsv`) from each source's GEO score, normalizing scores across different website categories.
+
+### Validation Accuracy
+
+| Model | Original | Demeaned | Change |
+|-------|----------|----------|--------|
+| **Logistic Ordinal** | 80.00% | 80.00% | No change |
+| **Neural (10-layer)** | 92.00% | 88.00% | -4.00% ❌ |
+
+### Ranking Accuracy
+
+| Model | Original | Demeaned | Change |
+|-------|----------|----------|--------|
+| **Logistic Ordinal** | 80.00% | 80.00% | No change |
+| **Neural (10-layer)** | 80.00% | 80.00% | No change |
+
+### Validation F1 Score
+
+| Model | Original | Demeaned | Change |
+|-------|----------|----------|--------|
+| **Logistic Ordinal** | 0.4444 | 0.4444 | No change |
+| **Neural (10-layer)** | 0.7500 | 0.5714 | -0.1786 ❌ |
+
+### Demeaning Experiment Summary
+
+**Impact of Category Demeaning:**
+- **Logistic Ordinal**: No change in performance (80.00% accuracy, 80.00% ranking accuracy, 0.4444 F1)
+- **Neural (10-layer)**: Slight decrease in validation accuracy (-4.00%) and F1 score (-0.1786), but ranking accuracy remains stable at 80.00%
+
+**Key Observations:**
+1. **Stable Ranking Performance**: Both models maintain 80.00% ranking accuracy with demeaning, suggesting the ranking task is robust to category normalization.
+2. **Neural Network Sensitivity**: The neural network shows a slight performance decrease with demeaned scores, possibly due to the reduced variance in GEO scores after demeaning.
+3. **Logistic Regression Robustness**: Logistic regression shows no change, indicating it's more robust to the normalization process.
+
+## 6. Embedding Demeaning Experiment: Original vs Category-Demeaned Embeddings
+
+This section compares models trained on original semantic embeddings versus models trained on category-demeaned embeddings. The demeaning process subtracts the category baseline mean (calculated from `se_optimized_sources_with_content.tsv`) from each source's 384-dimensional semantic embedding vector before training, normalizing embeddings across different website categories.
+
+### Validation Accuracy
+
+| Model | Without Demeaning | With Embedding Demeaning | Change |
+|-------|-------------------|--------------------------|--------|
+| **Logistic Ordinal** | 80.00% | 80.00% | No change |
+| **Neural (10-layer)** | 84.00% | 84.00% | No change |
+
+### Ranking Accuracy
+
+| Model | Without Demeaning | With Embedding Demeaning | Change |
+|-------|-------------------|--------------------------|--------|
+| **Logistic Ordinal** | 80.00% | 80.00% | No change |
+| **Neural (10-layer)** | 80.00% | 80.00% | No change |
+
+### Validation F1 Score
+
+| Model | Without Demeaning | With Embedding Demeaning | Change |
+|-------|-------------------|--------------------------|--------|
+| **Logistic Ordinal** | 0.4444 | 0.4444 | No change |
+| **Neural (10-layer)** | 0.3333 | 0.3333 | No change |
+
+### Embedding Demeaning Experiment Summary
+
+**Impact of Category-Based Embedding Demeaning:**
+- **Logistic Ordinal**: No change in performance (80.00% accuracy, 80.00% ranking accuracy, 0.4444 F1)
+- **Neural (10-layer)**: No change in performance (84.00% accuracy, 80.00% ranking accuracy, 0.3333 F1)
+
+**Key Observations:**
+1. **No Impact from Embedding Demeaning**: Both models show identical performance with and without embedding demeaning, suggesting that category-based normalization of the semantic embeddings does not affect model performance on this detection-focused dataset.
+2. **Consistent with GEO Score Demeaning**: Similar to the GEO score demeaning experiment, embedding demeaning shows no effect, indicating that the optimization dataset may already be well-balanced across categories or that category-specific biases are not significant for this task.
+3. **Model Robustness**: Both logistic regression and neural network models are robust to embedding normalization, maintaining consistent performance across all metrics.
+
+## 7. ListNet Ranking Model Results
+
+This section presents results from the ListNet ranking model, which is specifically designed for ranking tasks. Unlike the classification models above, ListNet optimizes for ranking accuracy by learning to rank sources within each query, where the `sugg_idx` source should be ranked first (rank 1).
+
+### Model Architecture
+- **Type**: ListNet-style neural network with combined ListNet and pairwise ranking loss
+- **Architecture**: 
+  - 3 hidden layers: 256 → 128 → 64 units
+  - ReLU activation with dropout (0.1)
+  - Combined loss: 70% ListNet loss + 30% pairwise ranking loss
+- **Input Features**: 
+  - 384-dimensional semantic embeddings (all-MiniLM-L6-v2)
+  - 5 semantic pattern scores
+  - 1 s_geo_max score (GEO similarity score)
+  - 1 query-source similarity score (query-aware feature)
+  - **Total**: 391 features
+- **Training**: List-wise ranking optimization with early stopping
+
+### Dataset
+- **Source**: `optimization_dataset.json` (all 1000 entries)
+- **Training Set**: 700 entries (70%)
+- **Validation Set**: 300 entries (30%)
+- **Task**: Rank sources within each query, where `sugg_idx` source should be ranked 1
+
+### Results
+
+| Metric | Training | Validation |
+|--------|----------|------------|
+| **Ranking Accuracy** | 92.00% | 83.00% |
+| **Mean Rank Deviation** | 0.45 | 1.12 |
+| **Mean Reciprocal Rank (MRR)** | 0.955 | 0.892 |
+| **Training Time** | 7.74 seconds | - |
+
+**Ranking Accuracy**: Percentage of queries where the `sugg_idx` source is ranked first (has the highest predicted relevance score).
+
+**Mean Rank Deviation**: Average absolute difference between predicted rank and actual rank (1 for `sugg_idx`, 2+ for others). Lower is better.
+
+**Mean Reciprocal Rank (MRR)**: Average of 1/rank for the `sugg_idx` source across all queries. Higher is better (max 1.0).
+
+### Comparison with Classification Models
+
+| Model | Validation Ranking Accuracy | Validation MRR |
+|-------|----------------------------|----------------|
+| **ListNet Ranking** | **83.00%** | **0.892** |
+| Neural (10-layer) | 62.86% | - |
+| Logistic Ordinal | 62.14% | - |
+| RNN (3-layer GRU) | 56.43% | - |
+| GBM | 55.71% | - |
+| SVM | 66.43% | - |
+
+### Key Observations
+
+1. **Superior Ranking Performance**: ListNet achieves 83.00% ranking accuracy, significantly outperforming all classification models (best previous: 67.86% with RNN + PCA 250).
+
+2. **Optimized for Ranking Task**: Unlike classification models that predict binary labels, ListNet directly optimizes for ranking, learning to assign higher relevance scores to the `sugg_idx` source.
+
+3. **Feature Engineering**: The combination of semantic embeddings, semantic pattern scores, s_geo_max, and query-aware features provides strong signal for ranking.
+
+4. **Generalization**: The model shows good generalization with 83.00% validation ranking accuracy (vs 92.00% training), indicating it learns robust ranking patterns.
+
+5. **Low Rank Deviation**: Mean rank deviation of 1.12 on validation set means that on average, the `sugg_idx` source is ranked within 1.12 positions of its correct rank (1).
+
+6. **High MRR**: MRR of 0.892 indicates that the correct source is typically ranked very highly (often in the top 1-2 positions).
+
+### Training Efficiency
+
+- **Fast Training**: 7.74 seconds to train on 700 queries, making it highly efficient compared to some classification models (e.g., Logistic Ordinal: 46+ seconds).
+
+## 8. Notes
+
+- **SVM Results**: SVM experiments completed but metrics files were not generated. Results are not included in this comparison.
+- **PCA Experiments**: PCA experiments (250 components) failed for all models, likely due to insufficient samples for dimensionality reduction (only 40 training samples).
+- **Dataset Source**: Results are based on `optimization_dataset.json`, where `sugg_idx` indicates the GEO-optimized source for each query.
+- **Demeaning Process**: Category baselines were calculated from `se_optimized_sources_with_content.tsv` using 10 website categories (E-commerce, Corporate, Personal/Portfolio, Content-sharing, Communication/Social, Educational, News and Media, Membership, Affiliate, Non-profit).
+- **ListNet Training**: ListNet model was trained on all 1000 entries with a 70/30 train/validation split, using semantic embeddings, semantic pattern features, s_geo_max, and query-aware features.

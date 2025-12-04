@@ -422,7 +422,8 @@ class NeuralOrdinalGEODetector:
         scaler_path: Optional[Path] = None,
         embedding_model_name: str = 'all-MiniLM-L6-v2',
         use_semantic_features: bool = False,
-        pca_components: Optional[int] = None
+        pca_components: Optional[int] = None,
+        baseline_embeddings_path: Optional[str] = None
     ):
         """
         Initialize the Neural Ordinal detector.
@@ -432,6 +433,7 @@ class NeuralOrdinalGEODetector:
             scaler_path: Path to saved scaler (pickle file)
             embedding_model_name: Name of the sentence transformer model for embeddings
             use_semantic_features: If True, include individual semantic matching pattern scores as features
+            baseline_embeddings_path: Path to JSON file with category baseline embeddings for demeaning
         """
         self.model = None
         self.scaler = StandardScaler()
@@ -449,6 +451,20 @@ class NeuralOrdinalGEODetector:
         if use_semantic_features:
             self.semantic_extractor = SemanticFeatureExtractor(model_name=embedding_model_name)
         
+        # Load baseline embeddings for category-based demeaning
+        self.baseline_embeddings = None
+        if baseline_embeddings_path:
+            try:
+                with open(baseline_embeddings_path, 'r', encoding='utf-8') as f:
+                    baseline_data = json.load(f)
+                    # Convert lists back to numpy arrays
+                    self.baseline_embeddings = {}
+                    for category, data in baseline_data.items():
+                        self.baseline_embeddings[category] = np.array(data['embedding_mean'])
+                print(f"Loaded baseline embeddings for {len(self.baseline_embeddings)} categories")
+            except Exception as e:
+                print(f"Warning: Failed to load baseline embeddings from {baseline_embeddings_path}: {e}")
+        
         # Build feature names
         self.feature_names = [f'embedding_dim_{i}' for i in range(self.embedding_dim)]
         if use_semantic_features:
@@ -457,7 +473,7 @@ class NeuralOrdinalGEODetector:
         if model_path and model_path.exists():
             self.load_model(model_path, scaler_path)
     
-    def extract_features(self, cleaned_text: str) -> np.ndarray:
+    def extract_features(self, cleaned_text: str, s_geo_max: Optional[float] = None, category: Optional[str] = None) -> np.ndarray:
         """Extract features from cleaned_text."""
         if not cleaned_text:
             base_features = np.zeros(self.embedding_dim)
@@ -468,12 +484,23 @@ class NeuralOrdinalGEODetector:
                 print(f"    Warning: Failed to generate embedding: {str(e)[:50]}")
                 base_features = np.zeros(self.embedding_dim)
         
+        # Demean embedding by category if baseline embeddings are loaded
+        if self.baseline_embeddings is not None and category:
+            category_mean = self.baseline_embeddings.get(category, self.baseline_embeddings.get('Unknown', np.zeros(self.embedding_dim)))
+            base_features = base_features - category_mean
+        
+        features_list = [base_features]
+        
+        # Add s_geo_max as a feature if provided
+        if s_geo_max is not None:
+            features_list.append(np.array([float(s_geo_max)]))
+        
         # Add semantic pattern scores if enabled
         if self.use_semantic_features and self.semantic_extractor:
             semantic_scores = self.semantic_extractor.extract_pattern_scores(cleaned_text)
-            return np.concatenate([base_features, semantic_scores])
-        else:
-            return base_features
+            features_list.append(semantic_scores)
+        
+        return np.concatenate(features_list)
     
     def prepare_training_data(
         self, 
@@ -507,7 +534,11 @@ class NeuralOrdinalGEODetector:
                 # Label: 2 if this source is the GEO source (sugg_idx), 0 otherwise
                 label = 2 if source_idx == sugg_idx else 0
                 
-                features = self.extract_features(cleaned_text)
+                # Get source data
+                s_geo_max = source.get('s_geo_max', None)
+                category = source.get('category', None)
+                
+                features = self.extract_features(cleaned_text, s_geo_max=s_geo_max, category=category)
                 
                 X.append(features)
                 y.append(label)
@@ -1141,7 +1172,8 @@ def train_neural_ordinal_classifier(
     num_layers: int = 4,
     use_semantic_features: bool = False,
     model_name: str = 'neural_ordinal_geo_detector.pkl',
-    pca_components: Optional[int] = None
+    pca_components: Optional[int] = None,
+    baseline_embeddings_path: Optional[str] = None
 ) -> NeuralOrdinalGEODetector:
     """
     Train a Neural Ordinal classifier on optimization dataset.
@@ -1182,7 +1214,11 @@ def train_neural_ordinal_classifier(
     
     # Initialize detector
     print("\nInitializing embedding model...")
-    detector = NeuralOrdinalGEODetector(use_semantic_features=use_semantic_features, pca_components=pca_components)
+    detector = NeuralOrdinalGEODetector(
+        use_semantic_features=use_semantic_features, 
+        pca_components=pca_components,
+        baseline_embeddings_path=baseline_embeddings_path
+    )
     if pca_components is not None:
         print(f"PCA enabled: {pca_components} components")
     print(f"Embedding model: {detector.embedding_model.get_sentence_embedding_dimension()} dimensions")
@@ -1277,6 +1313,8 @@ if __name__ == '__main__':
                         help='Name of the model file')
     parser.add_argument('--pca-components', type=int, default=None,
                         help='Number of PCA components to keep (None = no PCA)')
+    parser.add_argument('--baseline-embeddings', type=str, default=None,
+                        help='Path to JSON file with category baseline embeddings for demeaning')
     
     args = parser.parse_args()
     
@@ -1288,6 +1326,10 @@ if __name__ == '__main__':
         output_dir = Path(args.output)
     else:
         output_dir = Path(__file__).parent
+    
+    baseline_embeddings_path = None
+    if args.baseline_embeddings:
+        baseline_embeddings_path = str(project_root / args.baseline_embeddings) if not Path(args.baseline_embeddings).is_absolute() else args.baseline_embeddings
     
     detector = train_neural_ordinal_classifier(
         optimization_dataset_path=str(opt_data_path),
@@ -1302,7 +1344,8 @@ if __name__ == '__main__':
         num_layers=args.num_layers,
         use_semantic_features=args.use_semantic_features,
         model_name=args.model_name,
-        pca_components=args.pca_components
+        pca_components=args.pca_components,
+        baseline_embeddings_path=baseline_embeddings_path
     )
     
     print("\n" + "="*80)

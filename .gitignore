@@ -159,10 +159,42 @@ venv.bak/
 .dmypy.json
 dmypy.json
 
-# ignore massive dataset
-optimization_dataset.json
-*.json
+# Project-specific ignores
+# Large datasets and data files
+data/raw/
+data/processed/
+*.jsonl
+*.tsv
+optimization_dataset*.json
+scraped_data*.json
+scraped_data*.jsonl
+se_optimized_sources*.json
+se_optimized_sources*.tsv
+combined_geo_dataset*.json
+combined_experiment_results.json
+category_baseline*.json
+naive_semantic_matching.json
+parsed_semantic_matching*.json
+ranking_analysis.json
+
+# Model files and outputs
 *.pkl
+src/classification/output/
+src/classification/src/classification/output/
+
+# Experimental scripts
+scripts/experimental/
+
+# Logs (already covered by *.log but being explicit)
+logs/
+
+# Build artifacts
+build/
+dist/
+anti_geo_runner.spec
+
+# OS files
+.DS_Store
 
 # Pyre type checker
 .pyre/

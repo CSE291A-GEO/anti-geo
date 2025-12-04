@@ -333,7 +333,9 @@ class LogisticOrdinalGEODetector:
         use_extreme_penalty: bool = False,
         use_margin_loss: bool = False,
         margin: float = 0.2,
-        extreme_penalty_weight: float = 2.0
+        extreme_penalty_weight: float = 2.0,
+        # Demeaning by category
+        baseline_embeddings_path: Optional[str] = None
     ):
         """
         Initialize the Logistic Ordinal detector.
@@ -351,6 +353,7 @@ class LogisticOrdinalGEODetector:
             use_margin_loss: If True, add margin-based ranking loss
             margin: Minimum gap between GEO and non-GEO probabilities
             extreme_penalty_weight: Weight for extreme failure penalty
+            baseline_embeddings_path: Path to JSON file with category baseline embeddings for demeaning
         """
         self.model = None
         self.scaler = StandardScaler()
@@ -375,6 +378,20 @@ class LogisticOrdinalGEODetector:
         if use_semantic_features:
             self.semantic_extractor = SemanticFeatureExtractor(model_name=embedding_model_name)
         
+        # Load baseline embeddings for category-based demeaning
+        self.baseline_embeddings = None
+        if baseline_embeddings_path:
+            try:
+                with open(baseline_embeddings_path, 'r', encoding='utf-8') as f:
+                    baseline_data = json.load(f)
+                    # Convert lists back to numpy arrays
+                    self.baseline_embeddings = {}
+                    for category, data in baseline_data.items():
+                        self.baseline_embeddings[category] = np.array(data['embedding_mean'])
+                print(f"Loaded baseline embeddings for {len(self.baseline_embeddings)} categories")
+            except Exception as e:
+                print(f"Warning: Failed to load baseline embeddings from {baseline_embeddings_path}: {e}")
+        
         # Build feature names
         self.feature_names = [f'embedding_dim_{i}' for i in range(self.embedding_dim)]
         if use_semantic_features:
@@ -387,16 +404,19 @@ class LogisticOrdinalGEODetector:
         if model_path and model_path.exists():
             self.load_model(model_path, scaler_path)
     
-    def extract_features(self, cleaned_text: str, entry_features: Optional[List[np.ndarray]] = None) -> np.ndarray:
+    def extract_features(self, cleaned_text: str, entry_features: Optional[List[np.ndarray]] = None, 
+                        s_geo_max: Optional[float] = None, category: Optional[str] = None) -> np.ndarray:
         """
         Extract features from cleaned_text.
         
         Args:
             cleaned_text: The cleaned text to embed
             entry_features: Optional list of features for other sources in the same entry (for relative features)
+            s_geo_max: Optional GEO score (s_geo_max) to include as a feature
+            category: Optional category name for demeaning embeddings
             
         Returns:
-            numpy array of features (embeddings + optionally semantic pattern scores + new features)
+            numpy array of features (embeddings + optionally semantic pattern scores + s_geo_max + new features)
         """
         if not cleaned_text:
             base_features = np.zeros(self.embedding_dim)
@@ -407,7 +427,16 @@ class LogisticOrdinalGEODetector:
                 print(f"    Warning: Failed to generate embedding: {str(e)[:50]}")
                 base_features = np.zeros(self.embedding_dim)
         
+        # Demean embedding by category if baseline embeddings are loaded
+        if self.baseline_embeddings is not None and category:
+            category_mean = self.baseline_embeddings.get(category, self.baseline_embeddings.get('Unknown', np.zeros(self.embedding_dim)))
+            base_features = base_features - category_mean
+        
         features_list = [base_features]
+        
+        # Add s_geo_max as a feature if provided
+        if s_geo_max is not None:
+            features_list.append(np.array([float(s_geo_max)]))
         
         # Add semantic pattern scores if enabled
         if self.use_semantic_features and self.semantic_extractor:
@@ -525,17 +554,26 @@ class LogisticOrdinalGEODetector:
                 # Using 2 for GEO to make it the "high" class in ordinal ranking
                 label = 2 if source_idx == sugg_idx else 0
                 
+                # Get source data
+                source = sources[source_idx]
+                s_geo_max = source.get('s_geo_max', None)
+                category = source.get('category', None)
+                
                 # Extract features for other sources in entry (for relative features)
                 entry_features = None
                 if self.use_relative_features:
                     entry_features = []
                     for other_idx, other_text in entry_texts:
                         if other_idx != source_idx:
-                            other_features = self.extract_features(other_text, entry_features=None)
+                            other_source = sources[other_idx]
+                            other_s_geo_max = other_source.get('s_geo_max', None)
+                            other_category = other_source.get('category', None)
+                            other_features = self.extract_features(other_text, entry_features=None, 
+                                                                  s_geo_max=other_s_geo_max, category=other_category)
                             entry_features.append(other_features)
                 
                 # Extract features
-                features = self.extract_features(cleaned_text, entry_features)
+                features = self.extract_features(cleaned_text, entry_features, s_geo_max=s_geo_max, category=category)
                 
                 X.append(features)
                 y.append(label)
@@ -1124,7 +1162,8 @@ def train_logistic_ordinal_classifier(
     use_extreme_penalty: bool = False,
     use_margin_loss: bool = False,
     margin: float = 0.2,
-    extreme_penalty_weight: float = 2.0
+    extreme_penalty_weight: float = 2.0,
+    baseline_embeddings_path: Optional[str] = None
 ) -> LogisticOrdinalGEODetector:
     """
     Train a Logistic Ordinal classifier on optimization dataset.
@@ -1171,7 +1210,8 @@ def train_logistic_ordinal_classifier(
         use_extreme_penalty=use_extreme_penalty,
         use_margin_loss=use_margin_loss,
         margin=margin,
-        extreme_penalty_weight=extreme_penalty_weight
+        extreme_penalty_weight=extreme_penalty_weight,
+        baseline_embeddings_path=baseline_embeddings_path
     )
     print(f"Embedding model: {detector.embedding_model.get_sentence_embedding_dimension()} dimensions")
     if use_semantic_features:
@@ -1285,6 +1325,8 @@ if __name__ == '__main__':
                         help='Minimum gap between GEO and non-GEO probabilities (default: 0.2)')
     parser.add_argument('--extreme-penalty-weight', type=float, default=2.0,
                         help='Weight for extreme failure penalty (default: 2.0)')
+    parser.add_argument('--baseline-embeddings', type=str, default=None,
+                        help='Path to JSON file with category baseline embeddings for demeaning')
     
     args = parser.parse_args()
     
@@ -1296,6 +1338,10 @@ if __name__ == '__main__':
         output_dir = Path(args.output)
     else:
         output_dir = Path(__file__).parent
+    
+    baseline_embeddings_path = None
+    if args.baseline_embeddings:
+        baseline_embeddings_path = str(project_root / args.baseline_embeddings) if not Path(args.baseline_embeddings).is_absolute() else args.baseline_embeddings
     
     detector = train_logistic_ordinal_classifier(
         optimization_dataset_path=str(opt_data_path),
@@ -1314,7 +1360,8 @@ if __name__ == '__main__':
         use_extreme_penalty=args.use_extreme_penalty,
         use_margin_loss=args.use_margin_loss,
         margin=args.margin,
-        extreme_penalty_weight=args.extreme_penalty_weight
+        extreme_penalty_weight=args.extreme_penalty_weight,
+        baseline_embeddings_path=baseline_embeddings_path
     )
     
     print("\n" + "="*80)
