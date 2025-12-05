@@ -648,6 +648,7 @@ class ListNetRankingClassifier:
         
         return {
             'ranking_accuracy': ranking_accuracy,
+            'classification_accuracy': ranking_accuracy,  # Same as ranking accuracy for binary classification
             'mean_rank_deviation': mean_rank_deviation,
             'mean_reciprocal_rank': mean_reciprocal_rank,
             'total_queries': total_queries
@@ -766,6 +767,7 @@ def main():
         'train_mean_rank_deviation': train_metrics['mean_rank_deviation'],
         'train_mean_reciprocal_rank': train_metrics['mean_reciprocal_rank'],
         'validation_ranking_accuracy': val_metrics.get('ranking_accuracy', 0.0),
+        'validation_classification_accuracy': val_metrics.get('classification_accuracy', val_metrics.get('ranking_accuracy', 0.0)),
         'validation_mean_rank_deviation': val_metrics.get('mean_rank_deviation', 0.0),
         'validation_mean_reciprocal_rank': val_metrics.get('mean_reciprocal_rank', 0.0),
         'training_time': training_time,

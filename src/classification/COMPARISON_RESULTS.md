@@ -317,10 +317,41 @@ This section presents results from the ListNet ranking model, which is specifica
 - **Input Features**: 
   - 384-dimensional semantic embeddings (all-MiniLM-L6-v2)
   - 5 semantic pattern scores
-  - 1 s_geo_max score (GEO similarity score)
-  - 1 query-source similarity score (query-aware feature)
-  - **Total**: 391 features
+  - **Total**: 389 features (without s_geo_max or query-aware features)
 - **Training**: List-wise ranking optimization with early stopping
+
+### Neural Network Structure Overview
+
+The ListNet ranking model uses a feed-forward neural network architecture optimized for learning-to-rank:
+
+**Layer Structure:**
+1. **Input Layer**: 389 features (384 semantic embeddings + 5 semantic pattern scores)
+2. **Hidden Layer 1**: 256 units
+   - Linear transformation: 389 → 256
+   - ReLU activation
+   - Dropout (0.1)
+3. **Hidden Layer 2**: 128 units
+   - Linear transformation: 256 → 128
+   - ReLU activation
+   - Dropout (0.1)
+4. **Hidden Layer 3**: 64 units
+   - Linear transformation: 128 → 64
+   - ReLU activation
+   - Dropout (0.1)
+5. **Output Layer**: 1 unit
+   - Linear transformation: 64 → 1
+   - Output: Single relevance score per source
+
+**Loss Functions:**
+- **ListNet Loss (70% weight)**: Compares the predicted top-1 probability distribution (softmax of scores) with the true ranking distribution. Uses cross-entropy between predicted and true probability distributions over sources.
+- **Pairwise Ranking Loss (30% weight)**: Encourages correct pairwise ordering. For each pair of sources where one has a better rank, penalizes cases where the better-ranked source has a lower predicted score. Uses margin ranking loss with margin=1.0.
+
+**Training Process:**
+- Processes queries one at a time (each query contains multiple sources to rank)
+- For each query, predicts relevance scores for all sources
+- Computes combined loss (70% ListNet + 30% pairwise) and backpropagates
+- Uses early stopping based on validation loss (patience=5 epochs)
+- Optimizer: Adam with learning rate 0.001
 
 ### Dataset
 - **Source**: `optimization_dataset.json` (all 1000 entries)
@@ -332,10 +363,11 @@ This section presents results from the ListNet ranking model, which is specifica
 
 | Metric | Training | Validation |
 |--------|----------|------------|
-| **Ranking Accuracy** | 92.00% | 83.00% |
-| **Mean Rank Deviation** | 0.45 | 1.12 |
-| **Mean Reciprocal Rank (MRR)** | 0.955 | 0.892 |
-| **Training Time** | 7.74 seconds | - |
+| **Ranking Accuracy** | 99.43% | 87.00% |
+| **Classification Accuracy** | 99.43% | 87.00% |
+| **Mean Rank Deviation** | 1.20 | 1.25 |
+| **Mean Reciprocal Rank (MRR)** | 0.997 | 0.919 |
+| **Training Time** | 6.94 seconds | - |
 
 **Ranking Accuracy**: Percentage of queries where the `sugg_idx` source is ranked first (has the highest predicted relevance score).
 
@@ -347,7 +379,7 @@ This section presents results from the ListNet ranking model, which is specifica
 
 | Model | Validation Ranking Accuracy | Validation MRR |
 |-------|----------------------------|----------------|
-| **ListNet Ranking** | **83.00%** | **0.892** |
+| **ListNet Ranking** | **87.00%** | **0.919** |
 | Neural (10-layer) | 62.86% | - |
 | Logistic Ordinal | 62.14% | - |
 | RNN (3-layer GRU) | 56.43% | - |
@@ -356,21 +388,21 @@ This section presents results from the ListNet ranking model, which is specifica
 
 ### Key Observations
 
-1. **Superior Ranking Performance**: ListNet achieves 83.00% ranking accuracy, significantly outperforming all classification models (best previous: 67.86% with RNN + PCA 250).
+1. **Superior Ranking Performance**: ListNet achieves 87.00% validation classification accuracy (ranking accuracy), significantly outperforming all classification models (best previous: 67.86% with RNN + PCA 250).
 
 2. **Optimized for Ranking Task**: Unlike classification models that predict binary labels, ListNet directly optimizes for ranking, learning to assign higher relevance scores to the `sugg_idx` source.
 
-3. **Feature Engineering**: The combination of semantic embeddings, semantic pattern scores, s_geo_max, and query-aware features provides strong signal for ranking.
+3. **Feature Engineering**: The combination of semantic embeddings and semantic pattern scores (without s_geo_max or query-aware features) provides strong signal for ranking.
 
-4. **Generalization**: The model shows good generalization with 83.00% validation ranking accuracy (vs 92.00% training), indicating it learns robust ranking patterns.
+4. **Generalization**: The model shows good generalization with 87.00% validation ranking accuracy (vs 99.43% training), indicating it learns robust ranking patterns while maintaining high performance.
 
-5. **Low Rank Deviation**: Mean rank deviation of 1.12 on validation set means that on average, the `sugg_idx` source is ranked within 1.12 positions of its correct rank (1).
+5. **Low Rank Deviation**: Mean rank deviation of 1.25 on validation set means that on average, the `sugg_idx` source is ranked within 1.25 positions of its correct rank (1).
 
-6. **High MRR**: MRR of 0.892 indicates that the correct source is typically ranked very highly (often in the top 1-2 positions).
+6. **High MRR**: MRR of 0.919 indicates that the correct source is typically ranked very highly (often in the top 1-2 positions).
 
 ### Training Efficiency
 
-- **Fast Training**: 7.74 seconds to train on 700 queries, making it highly efficient compared to some classification models (e.g., Logistic Ordinal: 46+ seconds).
+- **Fast Training**: 6.94 seconds to train on 700 queries, making it highly efficient compared to some classification models (e.g., Logistic Ordinal: 46+ seconds).
 
 ## 8. Notes
 
@@ -378,4 +410,4 @@ This section presents results from the ListNet ranking model, which is specifica
 - **PCA Experiments**: PCA experiments (250 components) failed for all models, likely due to insufficient samples for dimensionality reduction (only 40 training samples).
 - **Dataset Source**: Results are based on `optimization_dataset.json`, where `sugg_idx` indicates the GEO-optimized source for each query.
 - **Demeaning Process**: Category baselines were calculated from `se_optimized_sources_with_content.tsv` using 10 website categories (E-commerce, Corporate, Personal/Portfolio, Content-sharing, Communication/Social, Educational, News and Media, Membership, Affiliate, Non-profit).
-- **ListNet Training**: ListNet model was trained on all 1000 entries with a 70/30 train/validation split, using semantic embeddings, semantic pattern features, s_geo_max, and query-aware features.
+- **ListNet Training**: ListNet model was trained on all 1000 entries with a 70/30 train/validation split (700 training, 300 validation), using semantic embeddings and semantic pattern features (without s_geo_max or query-aware features). The model achieved 87.00% validation classification accuracy, which measures whether the top-ranked source matches the `sugg_idx` source.
