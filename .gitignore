@@ -185,6 +185,18 @@ src/classification/src/classification/output/
 # Experimental scripts
 scripts/experimental/
 
+# Ad-hoc local scripts and scratch outputs
+eval_*.py
+rerun_*.py
+train_eval_*.py
+train_and_eval_yuheng_ffnn.py
+check_stubborn_references.py
+clean_and_filter.py
+drop_sparse.py
+recalc_validation_score_gt0.py
+entries_with_few_contents.json
+searched_queries.txt
+
 # Logs (already covered by *.log but being explicit)
 logs/
 
