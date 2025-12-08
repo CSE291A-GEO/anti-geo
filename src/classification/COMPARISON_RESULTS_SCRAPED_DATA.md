@@ -157,6 +157,26 @@ All classification models use the same labeling scheme:
 4. **Ranking Task Suitability**: ListNet is specifically designed for ranking tasks and shows better performance than classification models adapted for ranking
 5. **Task Difficulty**: The binary ranking task (all GEO above all non-GEO) is more challenging than single-source ranking, explaining the lower accuracy compared to the previous granular ranking scheme
 
+## 6. Real-World Evaluation (Using Scraped-Data Classifier)
+To estimate GEO prevalence per source on the real-world dataset, we applied the best available scraped-data classifier.
+
+- **Model:** `neural_scraped_baseline.pkl`
+  - Architecture: 10-layer feed-forward network; Linear(384→128) × 9 with ReLU + Dropout(0.1), final Linear(128→1); threshold = -1.9867.
+  - Features: 384-d all-MiniLM-L6-v2 embeddings; StandardScaler.
+  - Training data: scraped dataset (train 40, val 25; 8 positives in train, 2 positives in val).
+  - Validation accuracy (scraped val, per-source): **84.00%** (from metrics file). Test accuracy: not available.
+
+- **Real-world results (73 queries / 548 sources, score > threshold = GEO):**
+  - # sources classified GEO: **59 / 548**
+  - Per-query GEO %: avg **0.102**, min **0.000**, max **0.900**, var **0.034038**
+  - Queries with ALL GEO: **0**; with NO GEO: **47**
+  - Histogram of GEO% per query:
+    - 0.0–0.2: 58
+    - 0.2–0.4: 8
+    - 0.4–0.6: 4
+    - 0.6–0.8: 2
+    - 0.8–1.0: 1
+
 ### Overall Conclusions
 
 1. **Classification vs Ranking**: Classification models (SVM, Logistic, Neural) achieve high validation accuracy (75-90%) but fail at ranking (0% validation ranking accuracy). ListNet, designed for ranking, achieves 25% validation ranking accuracy with the binary ranking scheme (all GEO sources = rank 1, all non-GEO = rank 2).

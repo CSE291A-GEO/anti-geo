@@ -128,6 +128,26 @@ Applying best threshold (-0.2858) to `real_world_dataset`:
 - Queries ALL GEO: 12; NO GEO: 3
 - Histogram (GEO% per query): 0.0–0.2: 8; 0.2–0.4: 12; 0.4–0.6: 18; 0.6–0.8: 12; 0.8–1.0: 23
 
+## Real-World Evaluation Using Scraped-Data Classifier
+To estimate GEO prevalence per source on the real-world dataset, we applied the best available scraped-data classifier.
+
+- **Model:** `neural_scraped_baseline.pkl`
+  - Architecture: 10-layer FFN; Linear(384→128) × 9 with ReLU + Dropout(0.1), final Linear(128→1); threshold = -1.9867.
+  - Features: 384-d all-MiniLM-L6-v2 embeddings; StandardScaler.
+  - Training data: scraped dataset (train 40, val 25; 8 positives in train, 2 positives in val).
+  - Validation accuracy (scraped val, per-source): **84.00%** (from metrics file). Test accuracy: not available.
+
+- **Real-world results (73 queries / 548 sources, score > threshold = GEO):**
+  - # sources classified GEO: **59 / 548**
+  - Per-query GEO %: avg **0.102**, min **0.000**, max **0.900**, var **0.034038**
+  - Queries with ALL GEO: **0**; with NO GEO: **47**
+  - Histogram of GEO% per query:
+    - 0.0–0.2: 58
+    - 0.2–0.4: 8
+    - 0.4–0.6: 4
+    - 0.6–0.8: 2
+    - 0.8–1.0: 1
+
 ## Model Files
 
 The trained model and associated files are saved in `src/classification/output/`:
