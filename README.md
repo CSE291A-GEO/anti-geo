@@ -57,5 +57,221 @@ If you signed up for a free pro account for students (prior to October 6th), you
 GEMINI_API_KEY= <your api key>
 ```
 
+## Running Models
+
+### Prerequisites
+
+1. Install dependencies:
+```bash
+pip install -r requirements.txt
+```
+
+2. Set up environment variables (for data generation):
+```bash
+export GEMINI_API_KEY=<your_api_key>
+```
+
+### Classification Models
+
+All classification models are in `src/classification/`. Each model can be run with or without semantic features.
+
+#### SVM Classifier
+```bash
+python src/classification/svm_classifier.py \
+    --opt-data optimization_dataset.json \
+    --limit 1000 --train-size 300 --validation-size 700 \
+    --C 1.5 \
+    --output src/classification \
+    --model-name svm_baseline.pkl
+
+# With semantic features (adds 5 GEO pattern scores)
+python src/classification/svm_classifier.py \
+    --opt-data optimization_dataset.json \
+    --limit 1000 --train-size 300 --validation-size 700 \
+    --C 1.5 --use-semantic-features \
+    --output src/classification \
+    --model-name svm_with_semantic.pkl
+```
+
+#### Logistic Ordinal Classifier
+```bash
+python src/classification/logistic_ordinal_classifier.py \
+    --opt-data optimization_dataset.json \
+    --limit 1000 --train-size 300 --validation-size 700 \
+    --C 1.0 \
+    --output src/classification \
+    --model-name logistic_baseline.pkl
+```
+
+#### Neural Network (10-layer Feed-Forward)
+```bash
+python src/classification/neural_ordinal_classifier.py \
+    --opt-data optimization_dataset.json \
+    --limit 1000 --train-size 300 --validation-size 700 \
+    --hidden-dim 128 --learning-rate 0.001 --epochs 50 --batch-size 32 --num-layers 10 \
+    --output src/classification \
+    --model-name neural_baseline.pkl
+```
+
+#### GBM (Gradient Boosting Machine)
+```bash
+python src/classification/gbm_ordinal_classifier.py \
+    --opt-data optimization_dataset.json \
+    --limit 1000 --train-size 300 --validation-size 700 \
+    --n-estimators 100 --learning-rate 0.1 --max-depth 3 \
+    --output src/classification \
+    --model-name gbm_baseline.pkl
+```
+
+#### RNN (Bidirectional GRU)
+```bash
+python src/classification/rnn_ordinal_classifier.py \
+    --opt-data optimization_dataset.json \
+    --limit 1000 --train-size 300 --validation-size 700 \
+    --rnn-type GRU --num-layers 3 --bidirectional \
+    --hidden-dim 128 --learning-rate 0.001 --epochs 50 --batch-size 32 \
+    --output src/classification \
+    --model-name rnn_baseline.pkl
+```
+
+### ListNet Ranking Model
+
+The ListNet model is optimized for ranking sources within queries:
+
+```bash
+python src/classification/listnet_ranking_classifier.py \
+    --opt-data optimization_dataset.json \
+    --train-size 700 --validation-size 300 \
+    --output src/classification \
+    --model-name listnet_ranking.pkl
+```
+
+### Training on Yuheng Dataset
+
+For binary classification on the yuheng_data.csv dataset:
+
+```bash
+python train_and_eval_yuheng_ffnn.py
+```
+
+### Running All Experiments
+
+To run all model experiments with and without semantic features:
+
+```bash
+bash run_all_experiments.sh
+```
+
+## Datasets
+
+### Dataset Overview
+
+| Dataset | Location | Description | Use Case |
+|---------|----------|-------------|----------|
+| `optimization_dataset.json` | `data/processed/` | GEO optimization progressions | Training classification/ranking models |
+| `yuheng_data.csv` | Root | Binary GEO vs non-GEO articles | Binary classification training |
+| `real_world_dataset.json` | Root | Scraped AI-mode search results | Real-world evaluation |
+| `combined_geo_dataset_*.json` | `data/processed/` | Combined datasets for various tasks | Training/testing splits |
+
+### Dataset Structures
+
+#### Optimization Dataset (`optimization_dataset.json`)
+
+Contains source text transformations through GEO optimization methods. See `docs/Dataset_Structure.md` for full details.
+
+```json
+{
+  "query": "search query text",
+  "source_index": 3,
+  "source_url": "https://example.com",
+  "tags": ["informational", "sports"],
+  "original_source": "Original text...",
+  "optimizations": {
+    "identity": "Original text...",
+    "fluent_gpt": "Optimized fluent text...",
+    "authoritative_mine": "Authoritative version...",
+    ...
+  }
+}
+```
+
+**Optimization Methods:**
+1. `identity` - No optimization (baseline)
+2. `fluent_gpt` - Make text more fluent
+3. `unique_words_gpt` - Add distinctive terminology
+4. `authoritative_mine` - Make source sound authoritative
+5. `more_quotes_mine` - Add expert quotes
+6. `citing_credible_mine` - Reference credible sources
+7. `simple_language_mine` - Simplify language
+8. `technical_terms_mine` - Add technical terms
+9. `stats_optimization_gpt` - Add statistics
+10. `seo_optimize_mine2` - Apply SEO practices
+
+#### Yuheng Dataset (`yuheng_data.csv`)
+
+Binary classification dataset with original and GEO-optimized articles:
+- `original_article` - Non-GEO content (label 0)
+- `best_edited_article` - GEO-optimized content (label 1)
+
+#### Real-World Dataset (`real_world_dataset.json`)
+
+Scraped from Google AI mode search results:
+- 73 queries with cleaned, deduplicated website contents
+- Max 10 sources per query
+- Used for evaluating model performance on real-world data
+
+### Processed Datasets
+
+Located in `data/processed/`:
+
+| File | Description |
+|------|-------------|
+| `combined_geo_dataset_classifier_train_200.json` | Training set (200 entries) for classification |
+| `combined_geo_dataset_classifier_test_100.json` | Test set (100 entries) for classification |
+| `combined_geo_dataset_ranking_train_200.json` | Training set for ranking models |
+| `combined_geo_dataset_ranking_test_100.json` | Test set for ranking models |
+| `optimization_dataset_ranking_for_listnet.json` | Formatted for ListNet training |
+| `yuheng_data_ranking.json` | Yuheng data formatted for ranking |
+
+### Creating Datasets
+
+#### Generate Optimization Dataset
+```bash
+python src/save_optimization_dataset.py --output my_dataset.json --max-samples 100
+```
+
+#### Generate Real-World Dataset
+```bash
+python generate_real_world_dataset.py
+```
+
+## Documentation
+
+Detailed documentation is available in the `docs/` directory:
+
+- `docs/Dataset_Structure.md` - Full optimization dataset format
+- `docs/workflow.md` - Data extraction and processing workflow
+- `docs/GEO_SCORE_CALCULATION_AND_FEATURIZATION.md` - GEO score calculation and feature extraction
+- `docs/IMPROVE_RANKING_ACCURACY.md` - Suggestions for improving model performance
+- `src/classification/FEATURES.md` - Feature extraction details
+- `src/classification/COMPARISON_RESULTS.md` - Model comparison results
+- `REALWORLD_TESTING.md` - Real-world evaluation results
+
+## Model Performance Summary
+
+### Best Results on Optimization Dataset
+
+| Model | Validation Accuracy | Ranking Accuracy |
+|-------|---------------------|------------------|
+| **ListNet Ranking** | 87.00% | 87.00% |
+| SVM (PCA 250) | 86.57% | 66.43% |
+| Neural (baseline) | 84.86% | 62.86% |
+
+### Best Results on Yuheng Dataset
+
+| Model | Validation Accuracy |
+|-------|---------------------|
+| **ListNet** | 90.30% |
+
 # Acknowledgements
 ```/src``` is built off of https://github.com/GEO-optim/GEO.git, from GEO-bench paper
