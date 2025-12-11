@@ -9,7 +9,4 @@ datasets
 nltk
 numpy
 requests
-sentence-transformers
-scikit-learn
-sentence-transformers
-scikit-learn
+google-genai
