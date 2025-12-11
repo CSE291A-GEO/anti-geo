@@ -5,8 +5,6 @@ Project experimenting with detecting GEO content and creating LLMs that are robu
 
 Generating datasets to analyze Generative Engine Optimization (GEO). The primary goal is to identify and study "GEO-optimized" content—sources that appear prominently in AI-generated search summaries (like Google AI Overviews) but are ranked lower or are entirely absent from traditional organic search results.
 
-> **Note:** The `warning_prompts` directory and the `Detect_misused_GEO_using_exaggerations` script were exploratory and paused for now.
-
 ## Project Structure
 
   * **`Anti_GEO_Dataset_Generation.ipynb`**: The core Jupyter Notebook. It handles fetching search results via SerpApi, identifying GEO-optimized sources, and scraping their HTML content.
@@ -89,6 +87,8 @@ The final scraped data (`scraped_data.jsonl`) contains entries in the following 
 ```
 
 ## Pattern Detection Methods
+
+> **Note:** The `Detect_misused_GEO_using_exaggerations` script was exploratory and not very useful in GEO-detection.
 
 This project implements two complementary approaches for detecting GEO (Generative Engine Optimization) patterns:
 
