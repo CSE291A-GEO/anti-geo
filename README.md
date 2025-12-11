@@ -2,7 +2,7 @@
 
 This repository hosts the codebase for generating datasets to analyze Generative Engine Optimization (GEO). The primary goal is to identify and study "GEO-optimized" content—sources that appear prominently in AI-generated search summaries (like Google AI Overviews) but are ranked lower or are entirely absent from traditional organic search results.
 
-> **Note:** The `warning_prompts` directory and the `Detect_misused_GEO_using_exaggerations....` script are currently under active exploration and development.
+> **Note:** The `warning_prompts` directory and the `Detect_misused_GEO_using_exaggerations` script were exploratory and paused for now.
 
 ## Project Structure
 
